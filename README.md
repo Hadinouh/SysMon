@@ -3,7 +3,7 @@ SysMon real-time Windows system monitoring application
 
 ## Current Version
 
-v0.1
+v0.2
 
 ## Features
 
@@ -16,7 +16,3 @@ v0.1
 - Live status indicator
 
 
-Compile using:
-
-```bash
-g++ Main.cpp -o SysMon.exe -mwindows -lgdi32
