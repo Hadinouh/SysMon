@@ -6,6 +6,7 @@
 #include <algorithm>
 #include "Settings.h"
 #include "Stats.h"
+#include "Tray.h"
 // ============================================================
 // Live system data
 // ============================================================
@@ -28,134 +29,14 @@ bool widgetEnabled = true;
 
 int savedWidgetX = -1;
 int savedWidgetY = -1;
-
-NOTIFYICONDATAA trayIcon = {};
-
-#define WM_TRAYICON (WM_APP + 1)
-
-#define ID_TRAY_OPEN 1001
-#define ID_TRAY_EXIT 1002
 const COLORREF WIDGET_TRANSPARENT =
     RGB(1, 2, 3);
-// ============================================================
-// CPU tracking
-// ============================================================
-
-
-
-// ============================================================
 // Fonts
-// ============================================================
-
 HFONT titleFont;
 HFONT subtitleFont;
 HFONT labelFont;
 HFONT bigFont;
 HFONT smallFont;
-
-void addTrayIcon(HWND hwnd)
-{
-    trayIcon = {};
-
-    trayIcon.cbSize =
-        sizeof(NOTIFYICONDATAA);
-
-    trayIcon.hWnd =
-        hwnd;
-
-    trayIcon.uID =
-        1;
-
-    trayIcon.uFlags =
-        NIF_ICON |
-        NIF_MESSAGE |
-        NIF_TIP;
-
-    trayIcon.uCallbackMessage =
-        WM_TRAYICON;
-
-    trayIcon.hIcon =
-        LoadIcon(
-            nullptr,
-            IDI_APPLICATION
-        );
-
-    strcpy_s(
-        trayIcon.szTip,
-        "SysMon"
-    );
-
-    Shell_NotifyIconA(
-        NIM_ADD,
-        &trayIcon
-    );
-}
-
-
-void removeTrayIcon()
-{
-    Shell_NotifyIconA(
-        NIM_DELETE,
-        &trayIcon
-    );
-}
-
-
-void restoreSysMon(HWND hwnd)
-{
-    if (desktopWidget != nullptr)
-    {
-        KillTimer(
-            desktopWidget,
-            2
-        );
-
-        ShowWindow(
-            desktopWidget,
-            SW_HIDE
-        );
-    }
-
-    // Restart normal SysMon updates
-    SetTimer(
-        hwnd,
-        1,
-        1000,
-        nullptr
-    );
-
-    updateStats();
-
-    ShowWindow(
-        hwnd,
-        SW_SHOW
-    );
-
-    ShowWindow(
-        hwnd,
-        SW_RESTORE
-    );
-
-    InvalidateRect(
-        hwnd,
-        nullptr,
-        FALSE
-    );
-
-    UpdateWindow(
-        hwnd
-    );
-
-    SetForegroundWindow(
-        hwnd
-    );
-
-    removeTrayIcon();
-}
-// ============================================================
-// Drawing helpers
-// ============================================================
-
 void setFont(
     HDC hdc,
     HFONT font)
