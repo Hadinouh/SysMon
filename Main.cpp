@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <shellapi.h>
 #include <string>
 #include <sstream>
 #include <iomanip>
@@ -7,7 +8,16 @@
 // ============================================================
 // Live system data
 // ============================================================
-
+// ============================================================
+// Live system data
+// ============================================================
+RECT widgetToggleRect =
+{
+    600,
+    575,
+    755,
+    605
+};
 double cpuUsage = 0.0;
 
 double usedRamGB = 0.0;
@@ -21,6 +31,21 @@ int diskPercent = 0;
 ULONGLONG uptimeSeconds = 0;
 
 
+// Desktop widget
+HWND desktopWidget = nullptr;
+
+HFONT widgetLabelFont = nullptr;
+HFONT widgetValueFont = nullptr;
+bool widgetEnabled = true;
+
+NOTIFYICONDATAA trayIcon = {};
+
+#define WM_TRAYICON (WM_APP + 1)
+
+#define ID_TRAY_OPEN 1001
+#define ID_TRAY_EXIT 1002
+const COLORREF WIDGET_TRANSPARENT =
+    RGB(1, 2, 3);
 // ============================================================
 // CPU tracking
 // ============================================================
@@ -196,8 +221,140 @@ void updateStats()
     uptimeSeconds =
         GetTickCount64() / 1000;
 }
+void positionDesktopWidget(HWND hwnd)
+{
+    RECT workArea;
+
+    SystemParametersInfoA(
+        SPI_GETWORKAREA,
+        0,
+        &workArea,
+        0
+    );
+
+    const int widgetWidth = 240;
+    const int widgetHeight = 100;
+
+    int x =
+        workArea.right -
+        widgetWidth -
+        25;
+
+    int y =
+        workArea.bottom -
+        widgetHeight -
+        25;
+
+    SetWindowPos(
+        hwnd,
+        nullptr,
+        x,
+        y,
+        widgetWidth,
+        widgetHeight,
+        SWP_NOZORDER |
+        SWP_NOACTIVATE
+    );
+}
+void addTrayIcon(HWND hwnd)
+{
+    trayIcon = {};
+
+    trayIcon.cbSize =
+        sizeof(NOTIFYICONDATAA);
+
+    trayIcon.hWnd =
+        hwnd;
+
+    trayIcon.uID =
+        1;
+
+    trayIcon.uFlags =
+        NIF_ICON |
+        NIF_MESSAGE |
+        NIF_TIP;
+
+    trayIcon.uCallbackMessage =
+        WM_TRAYICON;
+
+    trayIcon.hIcon =
+        LoadIcon(
+            nullptr,
+            IDI_APPLICATION
+        );
+
+    strcpy_s(
+        trayIcon.szTip,
+        "SysMon"
+    );
+
+    Shell_NotifyIconA(
+        NIM_ADD,
+        &trayIcon
+    );
+}
 
 
+void removeTrayIcon()
+{
+    Shell_NotifyIconA(
+        NIM_DELETE,
+        &trayIcon
+    );
+}
+
+
+void restoreSysMon(HWND hwnd)
+{
+    if (desktopWidget != nullptr)
+    {
+        KillTimer(
+            desktopWidget,
+            2
+        );
+
+        ShowWindow(
+            desktopWidget,
+            SW_HIDE
+        );
+    }
+
+    // Restart normal SysMon updates
+    SetTimer(
+        hwnd,
+        1,
+        1000,
+        nullptr
+    );
+
+    updateStats();
+
+    ShowWindow(
+        hwnd,
+        SW_SHOW
+    );
+
+    ShowWindow(
+        hwnd,
+        SW_RESTORE
+    );
+
+    InvalidateRect(
+        hwnd,
+        nullptr,
+        FALSE
+    );
+
+    UpdateWindow(
+        hwnd
+    );
+
+    SetForegroundWindow(
+        hwnd
+    );
+
+    removeTrayIcon();
+}
 // ============================================================
 // Drawing helpers
 // ============================================================
@@ -695,13 +852,302 @@ void drawDashboard(
         textPrimary,
         labelFont
     );
+// --------------------------------------------------------
+// DESKTOP WIDGET TOGGLE
+// --------------------------------------------------------
+
+drawText(
+    hdc,
+    "DESKTOP WIDGET",
+    430,
+    580,
+    textSecondary,
+    smallFont
+);
+
+
+COLORREF toggleColor;
+
+if (widgetEnabled)
+{
+    toggleColor =
+        RGB(70, 220, 140);
+}
+else
+{
+    toggleColor =
+        RGB(90, 95, 105);
 }
 
+drawRoundedBox(
+    hdc,
+    610,
+    573,
+    755,
+    605,
+    toggleColor
+);
 
+drawText(
+    hdc,
+    widgetEnabled
+        ? "ON"
+        : "OFF",
+    665,
+    579,
+    RGB(245, 245, 245),
+    smallFont
+);
+}
 // ============================================================
 // Window procedure
 // ============================================================
+LRESULT CALLBACK WidgetProc(
+    HWND hwnd,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam)
+{
+    switch (message)
+    {
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
 
+        HDC hdc =
+            BeginPaint(
+                hwnd,
+                &ps
+            );
+
+        RECT client;
+        GetClientRect(
+            hwnd,
+            &client
+        );
+
+        // This exact color becomes invisible.
+        HBRUSH transparentBrush =
+            CreateSolidBrush(
+                WIDGET_TRANSPARENT
+            );
+
+        FillRect(
+            hdc,
+            &client,
+            transparentBrush
+        );
+
+        DeleteObject(
+            transparentBrush
+        );
+
+        SetBkMode(
+            hdc,
+            TRANSPARENT
+        );
+
+
+        // ---------------- CPU ----------------
+
+        SelectObject(
+            hdc,
+            widgetLabelFont
+        );
+
+        SetTextColor(
+            hdc,
+            RGB(170, 180, 195)
+        );
+
+        TextOutA(
+            hdc,
+            10,
+            8,
+            "CPU",
+            3
+        );
+
+
+        std::ostringstream cpuStream;
+
+        cpuStream
+            << std::fixed
+            << std::setprecision(1)
+            << cpuUsage
+            << "%";
+
+        std::string cpuString =
+            cpuStream.str();
+
+        SelectObject(
+            hdc,
+            widgetValueFont
+        );
+
+        SetTextColor(
+            hdc,
+            RGB(245, 245, 245)
+        );
+
+        TextOutA(
+            hdc,
+            60,
+            4,
+            cpuString.c_str(),
+            static_cast<int>(
+                cpuString.length()
+            )
+        );
+
+
+        HBRUSH blueBrush =
+            CreateSolidBrush(
+                RGB(66, 135, 245)
+            );
+
+        int cpuWidth =
+            static_cast<int>(
+                200 *
+                (cpuUsage / 100.0)
+            );
+
+        RECT cpuBar =
+        {
+            10,
+            35,
+            10 + cpuWidth,
+            39
+        };
+
+        FillRect(
+            hdc,
+            &cpuBar,
+            blueBrush
+        );
+
+
+        // ---------------- RAM ----------------
+
+        SelectObject(
+            hdc,
+            widgetLabelFont
+        );
+
+        SetTextColor(
+            hdc,
+            RGB(170, 180, 195)
+        );
+
+        TextOutA(
+            hdc,
+            10,
+            55,
+            "RAM",
+            3
+        );
+
+
+        std::ostringstream ramStream;
+
+        ramStream
+            << ramPercent
+            << "%";
+
+        std::string ramString =
+            ramStream.str();
+
+        SelectObject(
+            hdc,
+            widgetValueFont
+        );
+
+        SetTextColor(
+            hdc,
+            RGB(245, 245, 245)
+        );
+
+        TextOutA(
+            hdc,
+            60,
+            51,
+            ramString.c_str(),
+            static_cast<int>(
+                ramString.length()
+            )
+        );
+
+
+        int ramWidth =
+            static_cast<int>(
+                200 *
+                (ramPercent / 100.0)
+            );
+
+        RECT ramBar =
+        {
+            10,
+            82,
+            10 + ramWidth,
+            86
+        };
+
+        FillRect(
+            hdc,
+            &ramBar,
+            blueBrush
+        );
+
+        DeleteObject(
+            blueBrush
+        );
+
+
+        EndPaint(
+            hwnd,
+            &ps
+        );
+
+        return 0;
+    }
+
+
+    // Treat the visible widget as if it were a title bar.
+    // This lets you grab it and drag it freely.
+    case WM_TIMER:
+{
+    if (wParam == 2)
+    {
+        updateStats();
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            TRUE
+        );
+
+        UpdateWindow(
+            hwnd
+        );
+    }
+
+    return 0;
+}
+    case WM_NCHITTEST:
+        return HTCAPTION;
+
+
+    case WM_ERASEBKGND:
+        return 1;
+    }
+
+    return DefWindowProc(
+        hwnd,
+        message,
+        wParam,
+        lParam
+    );
+}
 LRESULT CALLBACK WindowProc(
     HWND hwnd,
     UINT message,
@@ -802,7 +1248,41 @@ LRESULT CALLBACK WindowProc(
                 "Segoe UI"
             );
 
+widgetLabelFont =
+    CreateFontA(
+        17,
+        0,
+        0,
+        0,
+        FW_SEMIBOLD,
+        FALSE,
+        FALSE,
+        FALSE,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        ANTIALIASED_QUALITY,
+        DEFAULT_PITCH,
+        "Segoe UI"
+    );
 
+widgetValueFont =
+    CreateFontA(
+        22,
+        0,
+        0,
+        0,
+        FW_BOLD,
+        FALSE,
+        FALSE,
+        FALSE,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        ANTIALIASED_QUALITY,
+        DEFAULT_PITCH,
+        "Segoe UI"
+    );
         // Initialize CPU counters
         getCpuUsage();
 
@@ -817,14 +1297,111 @@ LRESULT CALLBACK WindowProc(
 
         return 0;
     }
+    case WM_LBUTTONDOWN:
+{
+    int mouseX =
+        LOWORD(lParam);
 
+    int mouseY =
+        HIWORD(lParam);
 
-    case WM_TIMER:
+    if (
+        mouseX >= 610 &&
+        mouseX <= 755 &&
+        mouseY >= 573 &&
+        mouseY <= 605
+    )
     {
-        if (wParam == 1)
-        {
-            updateStats();
+        widgetEnabled =
+            !widgetEnabled;
 
+        if (
+            !widgetEnabled &&
+            desktopWidget != nullptr
+        )
+        {
+            ShowWindow(
+                desktopWidget,
+                SW_HIDE
+            );
+        }
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+    }
+
+    return 0;
+}
+case WM_SIZE:
+{
+    if (wParam == SIZE_MINIMIZED)
+    {
+        // Hide SysMon so it disappears
+        // completely from the taskbar.
+        ShowWindow(
+            hwnd,
+            SW_HIDE
+        );
+
+        addTrayIcon(
+            hwnd
+        );
+
+        // Only show desktop widget
+        // if the user has enabled it.
+       if (
+    widgetEnabled &&
+    desktopWidget != nullptr
+)
+{
+    // Stop the main-window timer
+    KillTimer(
+        hwnd,
+        1
+    );
+
+    updateStats();
+
+    ShowWindow(
+        desktopWidget,
+        SW_SHOWNOACTIVATE
+    );
+
+    // Widget gets its own live timer
+    SetTimer(
+        desktopWidget,
+        2,
+        1000,
+        nullptr
+    );
+
+    InvalidateRect(
+        desktopWidget,
+        nullptr,
+        TRUE
+    );
+
+    UpdateWindow(
+        desktopWidget
+    );
+}
+    }
+
+    return 0;
+}
+case WM_TIMER:
+{
+    if (wParam == 1)
+    {
+        // Read fresh CPU, RAM, disk and uptime values
+        updateStats();
+
+        // Refresh the main dashboard if it is open
+        if (IsWindowVisible(hwnd))
+        {
             InvalidateRect(
                 hwnd,
                 nullptr,
@@ -832,10 +1409,120 @@ LRESULT CALLBACK WindowProc(
             );
         }
 
-        return 0;
+        // Refresh the desktop widget if it is visible
+        if (
+            widgetEnabled &&
+            desktopWidget != nullptr &&
+            IsWindowVisible(desktopWidget)
+        )
+        {
+            InvalidateRect(
+                desktopWidget,
+                nullptr,
+                TRUE
+            );
+
+            UpdateWindow(
+                desktopWidget
+            );
+        }
     }
 
+    return 0;
+}
+case WM_TRAYICON:
+{
+    if (
+        lParam == WM_LBUTTONDBLCLK
+    )
+    {
+        restoreSysMon(
+            hwnd
+        );
+    }
 
+    if (
+        lParam == WM_RBUTTONUP
+    )
+    {
+        POINT cursor;
+
+        GetCursorPos(
+            &cursor
+        );
+
+        HMENU menu =
+            CreatePopupMenu();
+
+        AppendMenuA(
+            menu,
+            MF_STRING,
+            ID_TRAY_OPEN,
+            "Open SysMon"
+        );
+
+        AppendMenuA(
+            menu,
+            MF_SEPARATOR,
+            0,
+            nullptr
+        );
+
+        AppendMenuA(
+            menu,
+            MF_STRING,
+            ID_TRAY_EXIT,
+            "Exit"
+        );
+
+        SetForegroundWindow(
+            hwnd
+        );
+
+        int command =
+            TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD |
+                TPM_RIGHTBUTTON,
+
+                cursor.x,
+                cursor.y,
+
+                0,
+
+                hwnd,
+                nullptr
+            );
+
+        DestroyMenu(
+            menu
+        );
+
+        if (
+            command ==
+            ID_TRAY_OPEN
+        )
+        {
+            restoreSysMon(
+                hwnd
+            );
+        }
+
+        if (
+            command ==
+            ID_TRAY_EXIT
+        )
+        {
+            removeTrayIcon();
+
+            DestroyWindow(
+                hwnd
+            );
+        }
+    }
+
+    return 0;
+}
     case WM_PAINT:
     {
         PAINTSTRUCT ps;
@@ -864,23 +1551,27 @@ LRESULT CALLBACK WindowProc(
         return 1;
 
 
-    case WM_DESTROY:
-    {
-        KillTimer(
-            hwnd,
-            1
-        );
+   case WM_DESTROY:
+{
+    KillTimer(
+        hwnd,
+        1
+    );
 
-        DeleteObject(titleFont);
-        DeleteObject(subtitleFont);
-        DeleteObject(labelFont);
-        DeleteObject(bigFont);
-        DeleteObject(smallFont);
+    DeleteObject(titleFont);
+    DeleteObject(subtitleFont);
+    DeleteObject(labelFont);
+    DeleteObject(bigFont);
+    DeleteObject(smallFont);
 
-        PostQuitMessage(0);
+    DeleteObject(widgetLabelFont);
+    DeleteObject(widgetValueFont);
 
-        return 0;
-    }
+removeTrayIcon();
+    PostQuitMessage(0);
+
+    return 0;
+}
     }
 
     return DefWindowProc(
@@ -929,7 +1620,31 @@ int WINAPI WinMain(
 
     if (!RegisterClassA(&wc))
         return 0;
+const char WIDGET_CLASS_NAME[] =
+    "SysMonDesktopWidget";
 
+WNDCLASSA widgetClass = {};
+
+widgetClass.lpfnWndProc =
+    WidgetProc;
+
+widgetClass.hInstance =
+    hInstance;
+
+widgetClass.lpszClassName =
+    WIDGET_CLASS_NAME;
+
+widgetClass.hCursor =
+    LoadCursor(
+        nullptr,
+        IDC_ARROW
+    );
+
+widgetClass.hbrBackground =
+    nullptr;
+
+if (!RegisterClassA(&widgetClass))
+    return 0;
 
     HWND hwnd =
         CreateWindowExA(
@@ -957,7 +1672,42 @@ int WINAPI WinMain(
 
     if (hwnd == nullptr)
         return 0;
+desktopWidget =
+    CreateWindowExA(
+        WS_EX_LAYERED |
+        WS_EX_TOOLWINDOW |
+        WS_EX_NOACTIVATE,
 
+        WIDGET_CLASS_NAME,
+
+        "",
+
+        WS_POPUP,
+
+        0,
+        0,
+        240,
+        100,
+
+        nullptr,
+        nullptr,
+        hInstance,
+        nullptr
+    );
+
+if (desktopWidget != nullptr)
+{
+    SetLayeredWindowAttributes(
+        desktopWidget,
+        WIDGET_TRANSPARENT,
+        0,
+        LWA_COLORKEY
+    );
+
+    positionDesktopWidget(
+        desktopWidget
+    );
+}
 
     ShowWindow(
         hwnd,
