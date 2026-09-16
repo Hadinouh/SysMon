@@ -9,10 +9,27 @@
 #include "Tray.h"
 #include "Widget.h"
 #include "UI.h"
+#include "Processes.h"
+int processMaxScrollOffset = 0;
+
+int processScrollbarThumbTop = 221;
+int processScrollbarThumbBottom = 261;
+
+bool processScrollbarDragging = false;
+int processScrollbarDragOffsetY = 0;
 
 AppPage currentPage =
     AppPage::Dashboard;
     int processScrollOffset = 0;
+    ProcessSort processSort =
+    ProcessSort::Memory;
+bool processSortDescending =
+    true;
+    std::string processSearch = "";
+    bool processSearchFocused = false;
+    DWORD selectedProcessPid = MAXDWORD;
+    DWORD hoveredProcessPid = MAXDWORD;
+    std::vector<DWORD> visibleProcessPids;
 void drawDashboard(
     HWND hwnd,
     HDC hdc
@@ -182,21 +199,342 @@ widgetValueFont =
 
         return 0;
     }
-    case WM_MOUSEWHEEL:
+
+
+
+case WM_LBUTTONUP:
+{
+    processScrollbarDragging = false;
+ break;
+}
+case WM_MOUSEMOVE:
+{
+    // Stop dragging when the real mouse button is released
+    if (
+        processScrollbarDragging &&
+        (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0
+    )
+    {
+        processScrollbarDragging = false;
+    }
+
+
+    // --------------------------------------------------------
+    // PROCESS SCROLLBAR DRAGGING
+    // --------------------------------------------------------
+
+    if (
+        currentPage == AppPage::Processes &&
+        processScrollbarDragging
+    )
+    {
+        int mouseY =
+            HIWORD(lParam);
+
+        const int trackTop = 221;
+        const int trackBottom = 513;
+
+        int thumbHeight =
+            processScrollbarThumbBottom -
+            processScrollbarThumbTop;
+
+        int thumbTravel =
+            (trackBottom - trackTop) -
+            thumbHeight;
+
+        int newThumbTop =
+            mouseY -
+            processScrollbarDragOffsetY;
+
+        if (newThumbTop < trackTop)
+        {
+            newThumbTop = trackTop;
+        }
+
+        if (
+            newThumbTop >
+            trackTop + thumbTravel
+        )
+        {
+            newThumbTop =
+                trackTop + thumbTravel;
+        }
+
+        if (
+            thumbTravel > 0 &&
+            processMaxScrollOffset > 0
+        )
+        {
+            double ratio =
+                static_cast<double>(
+                    newThumbTop - trackTop
+                ) /
+                static_cast<double>(
+                    thumbTravel
+                );
+
+            processScrollOffset =
+                static_cast<int>(
+                    ratio *
+                    processMaxScrollOffset
+                );
+        }
+
+        hoveredProcessPid = MAXDWORD;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+
+    // --------------------------------------------------------
+    // PROCESS ROW HOVER
+    // --------------------------------------------------------
+
+    if (currentPage == AppPage::Processes)
+    {
+        int mouseX =
+            LOWORD(lParam);
+
+        int mouseY =
+            HIWORD(lParam);
+
+        DWORD newHoveredPid =
+            MAXDWORD;
+
+        if (
+            mouseX >= 285 &&
+            mouseX <= 1115 &&
+            mouseY >= 205 &&
+            mouseY < 529
+        )
+        {
+            int rowIndex =
+                (mouseY - 205) / 27;
+
+            if (
+                rowIndex >= 0 &&
+                rowIndex <
+                    static_cast<int>(
+                        visibleProcessPids.size()
+                    )
+            )
+            {
+                newHoveredPid =
+                    visibleProcessPids[
+                        rowIndex
+                    ];
+            }
+        }
+
+        if (
+            newHoveredPid !=
+            hoveredProcessPid
+        )
+        {
+            hoveredProcessPid =
+                newHoveredPid;
+
+            InvalidateRect(
+                hwnd,
+                nullptr,
+                FALSE
+            );
+        }
+    }
+
+    break;
+}
+
+   case WM_MOUSEWHEEL:
 {
     if (currentPage == AppPage::Processes)
     {
         short wheelDelta =
-            GET_WHEEL_DELTA_WPARAM(wParam);
+            GET_WHEEL_DELTA_WPARAM(
+                wParam
+            );
 
         if (wheelDelta < 0)
         {
             processScrollOffset += 3;
         }
-        else
+        else if (wheelDelta > 0)
         {
             processScrollOffset -= 3;
         }
+
+        if (processScrollOffset < 0)
+        {
+            processScrollOffset = 0;
+        }
+
+        if (
+            processScrollOffset >
+            processMaxScrollOffset
+        )
+        {
+            processScrollOffset =
+                processMaxScrollOffset;
+        }
+
+        hoveredProcessPid =
+            MAXDWORD;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+    break;
+}
+case WM_CHAR:
+{
+    if (
+        currentPage == AppPage::Processes &&
+        processSearchFocused
+    )
+    {
+        // Backspace
+        if (wParam == 8)
+        {
+            if (!processSearch.empty())
+            {
+                processSearch.pop_back();
+            }
+        }
+
+        // Printable characters
+        else if (
+            wParam >= 32 &&
+            wParam <= 126
+        )
+        {
+            processSearch +=
+                static_cast<char>(
+                    wParam
+                );
+        }
+
+        processScrollOffset = 0;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+    break;
+}
+
+
+case WM_LBUTTONDOWN:
+{
+    int mouseX =
+        LOWORD(lParam);
+
+    int mouseY =
+        HIWORD(lParam);
+// --------------------------------------------------------
+// PROCESS SCROLLBAR
+// --------------------------------------------------------
+
+if (
+    currentPage == AppPage::Processes &&
+    mouseX >= 1114 &&
+    mouseX <= 1136
+)
+{
+    // Top arrow
+    if (
+        mouseY >= 205 &&
+        mouseY <= 221
+    )
+    {
+        processScrollOffset -= 3;
+
+        if (processScrollOffset < 0)
+        {
+            processScrollOffset = 0;
+        }
+
+        hoveredProcessPid = MAXDWORD;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+
+    // Bottom arrow
+    if (
+        mouseY >= 513 &&
+        mouseY <= 529
+    )
+    {
+        processScrollOffset += 3;
+
+        if (
+            processScrollOffset >
+            processMaxScrollOffset
+        )
+        {
+            processScrollOffset =
+                processMaxScrollOffset;
+        }
+
+        hoveredProcessPid = MAXDWORD;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+
+    // Drag scrollbar thumb
+    if (
+        mouseY >= processScrollbarThumbTop &&
+        mouseY <= processScrollbarThumbBottom
+    )
+    {
+        processScrollbarDragging =
+            true;
+
+        processScrollbarDragOffsetY =
+            mouseY -
+            processScrollbarThumbTop;
+
+        return 0;
+    }
+
+
+    // Page up
+    if (
+        mouseY > 221 &&
+        mouseY < processScrollbarThumbTop
+    )
+    {
+        processScrollOffset -= 12;
 
         if (processScrollOffset < 0)
         {
@@ -212,27 +550,171 @@ widgetValueFont =
         return 0;
     }
 
-    break;
+
+    // Page down
+    if (
+        mouseY > processScrollbarThumbBottom &&
+        mouseY < 513
+    )
+    {
+        processScrollOffset += 12;
+
+        if (
+            processScrollOffset >
+            processMaxScrollOffset
+        )
+        {
+            processScrollOffset =
+                processMaxScrollOffset;
+        }
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
 }
-    case WM_LBUTTONDOWN:
-    
-{
-    int mouseX =
-        LOWORD(lParam);
 
-    int mouseY =
-        HIWORD(lParam);
+    // --------------------------------------------------------
+    // CLEAR PROCESS SEARCH FOCUS ON ANY CLICK
+    // --------------------------------------------------------
 
-// Dashboard
+    if (currentPage == AppPage::Processes)
+    {
+        processSearchFocused = false;
+    }
+
+
+    // --------------------------------------------------------
+    // SIDEBAR NAVIGATION
+    // --------------------------------------------------------
+
+    // Dashboard
+    if (
+        mouseX >= 35 &&
+        mouseX <= 185 &&
+        mouseY >= 125 &&
+        mouseY <= 170
+    )
+    {
+        currentPage =
+            AppPage::Dashboard;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+
+    // Processes
+    if (
+        mouseX >= 35 &&
+        mouseX <= 185 &&
+        mouseY >= 175 &&
+        mouseY <= 220
+    )
+    {
+        currentPage =
+            AppPage::Processes;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+
+    // Performance
+    if (
+        mouseX >= 35 &&
+        mouseX <= 185 &&
+        mouseY >= 225 &&
+        mouseY <= 270
+    )
+    {
+        currentPage =
+            AppPage::Performance;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+
+    // System Info
+    if (
+        mouseX >= 35 &&
+        mouseX <= 185 &&
+        mouseY >= 275 &&
+        mouseY <= 320
+    )
+    {
+        currentPage =
+            AppPage::SystemInfo;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+
+    // Settings
+    if (
+        mouseX >= 35 &&
+        mouseX <= 185 &&
+        mouseY >= 325 &&
+        mouseY <= 370
+    )
+    {
+        currentPage =
+            AppPage::Settings;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+
+    // --------------------------------------------------------
+    // PROCESS SEARCH BOX
+    // --------------------------------------------------------
+// Clear search button
 if (
-    mouseX >= 35 &&
-    mouseX <= 185 &&
-    mouseY >= 125 &&
-    mouseY <= 170
+    currentPage == AppPage::Processes &&
+    !processSearch.empty() &&
+    mouseX >= 545 &&
+    mouseX <= 575 &&
+    mouseY >= 118 &&
+    mouseY <= 147
 )
 {
-    currentPage =
-        AppPage::Dashboard;
+    processSearch.clear();
+
+    processScrollOffset = 0;
+
+    processSearchFocused = true;
 
     InvalidateRect(
         hwnd,
@@ -242,102 +724,255 @@ if (
 
     return 0;
 }
+    if (
+        currentPage == AppPage::Processes &&
+        mouseX >= 285 &&
+        mouseX <= 575 &&
+        mouseY >= 120 &&
+        mouseY <= 145
+    )
+    {
+        processSearchFocused = true;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
 
 
-// Processes
+    // --------------------------------------------------------
+    // PROCESS TABLE HEADER CLICKS
+    // --------------------------------------------------------
+
+    if (
+        currentPage == AppPage::Processes &&
+        mouseY >= 155 &&
+        mouseY <= 190
+    )
+    {
+        ProcessSort newSort =
+            processSort;
+
+        bool headerClicked =
+            true;
+
+
+        // PROCESS
+        if (
+            mouseX >= 285 &&
+            mouseX < 680
+        )
+        {
+            newSort =
+                ProcessSort::Name;
+        }
+
+        // CPU
+        else if (
+            mouseX >= 680 &&
+            mouseX < 790
+        )
+        {
+            newSort =
+                ProcessSort::CPU;
+        }
+
+        // MEMORY
+        else if (
+            mouseX >= 790 &&
+            mouseX < 920
+        )
+        {
+            newSort =
+                ProcessSort::Memory;
+        }
+
+        // THREADS
+        else if (
+            mouseX >= 920 &&
+            mouseX < 1040
+        )
+        {
+            newSort =
+                ProcessSort::Threads;
+        }
+
+        // PID
+        else if (
+            mouseX >= 1040 &&
+            mouseX <= 1115
+        )
+        {
+            newSort =
+                ProcessSort::PID;
+        }
+
+        else
+        {
+            headerClicked =
+                false;
+        }
+
+
+        if (headerClicked)
+        {
+            if (newSort == processSort)
+            {
+                processSortDescending =
+                    !processSortDescending;
+            }
+            else
+            {
+                processSort =
+                    newSort;
+
+                processSortDescending =
+                    processSort !=
+                    ProcessSort::Name;
+            }
+
+            processScrollOffset = 0;
+
+            InvalidateRect(
+                hwnd,
+                nullptr,
+                FALSE
+            );
+
+            return 0;
+        }
+    }
+
+    // --------------------------------------------------------
+// PROCESS ROW SELECTION
+// --------------------------------------------------------
+
 if (
-    mouseX >= 35 &&
-    mouseX <= 185 &&
-    mouseY >= 175 &&
-    mouseY <= 220
+    currentPage == AppPage::Processes &&
+    mouseX >= 285 &&
+    mouseX <= 1115 &&
+    mouseY >= 205 &&
+    mouseY < 529
 )
 {
-    currentPage =
-        AppPage::Processes;
+    int rowIndex =
+        (mouseY - 205) / 27;
 
-    InvalidateRect(
-        hwnd,
-        nullptr,
-        FALSE
-    );
+    if (
+        rowIndex >= 0 &&
+        rowIndex <
+            static_cast<int>(
+                visibleProcessPids.size()
+            )
+    )
+    {
+        selectedProcessPid =
+            visibleProcessPids[
+                rowIndex
+            ];
+
+        processSearchFocused =
+            false;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+}
+// --------------------------------------------------------
+// END PROCESS BUTTON
+// --------------------------------------------------------
+
+if (
+    currentPage == AppPage::Processes &&
+    selectedProcessPid != MAXDWORD &&
+    selectedProcessPid != 0 &&
+    selectedProcessPid != 4 &&
+    selectedProcessPid != GetCurrentProcessId() &&
+    mouseX >= 960 &&
+    mouseX <= 1100 &&
+    mouseY >= 575 &&
+    mouseY <= 600
+)
+{
+    int result =
+        MessageBoxA(
+            hwnd,
+            "Are you sure you want to end this task and its related processes?",
+            "Confirm End Process",
+            MB_YESNO |
+            MB_ICONWARNING |
+            MB_DEFBUTTON2
+        );
+
+    if (result == IDYES)
+    {
+        if (
+          terminateTaskByPid(
+    selectedProcessPid
+)
+        )
+        {
+            MessageBoxA(
+                hwnd,
+                "The task was ended successfully.",
+                "SysMon",
+                MB_OK |
+                MB_ICONINFORMATION
+            );
+
+            selectedProcessPid =
+                MAXDWORD;
+
+            processScrollOffset =
+                0;
+
+            InvalidateRect(
+                hwnd,
+                nullptr,
+                FALSE
+            );
+        }
+        else
+        {
+            MessageBoxA(
+                hwnd,
+                "SysMon could not terminate this process.\n\nIt may be protected by Windows or require administrator privileges.",
+                "Unable to End Process",
+                MB_OK |
+                MB_ICONERROR
+            );
+        }
+    }
 
     return 0;
 }
 
+    // --------------------------------------------------------
+    // DESKTOP WIDGET TOGGLE
+    // --------------------------------------------------------
 
-// Performance
-if (
-    mouseX >= 35 &&
-    mouseX <= 185 &&
-    mouseY >= 225 &&
-    mouseY <= 270
-)
-{
-    currentPage =
-        AppPage::Performance;
-
-    InvalidateRect(
-        hwnd,
-        nullptr,
-        FALSE
-    );
-
-    return 0;
-}
-
-
-// System Info
-if (
-    mouseX >= 35 &&
-    mouseX <= 185 &&
-    mouseY >= 275 &&
-    mouseY <= 320
-)
-{
-    currentPage =
-        AppPage::SystemInfo;
-
-    InvalidateRect(
-        hwnd,
-        nullptr,
-        FALSE
-    );
-
-    return 0;
-}
-
-
-// Settings
-if (
-    mouseX >= 35 &&
-    mouseX <= 185 &&
-    mouseY >= 325 &&
-    mouseY <= 370
-)
-{
-    currentPage =
-        AppPage::Settings;
-
-    InvalidateRect(
-        hwnd,
-        nullptr,
-        FALSE
-    );
-
-    return 0;
-}
-
-
-  if (
-    mouseX >= 875 &&
-    mouseX <= 1090 &&
-    mouseY >= 525 &&
-    mouseY <= 557
-)
+    if (
+        currentPage == AppPage::Dashboard &&
+        mouseX >= 875 &&
+        mouseX <= 1090 &&
+        mouseY >= 525 &&
+        mouseY <= 557
+    )
     {
         widgetEnabled =
             !widgetEnabled;
-saveWidgetEnabled();
+
+        saveWidgetEnabled();
+
         if (
             !widgetEnabled &&
             desktopWidget != nullptr
@@ -354,9 +989,12 @@ saveWidgetEnabled();
             nullptr,
             FALSE
         );
+        return 0;
     }
 
-    return 0;
+
+    break;
+
 }
 case WM_SIZE:
 {

@@ -332,6 +332,19 @@ std::vector<ProcessInfo> getRunningProcesses()
                 )
             );
 
+            process.parentPid =
+    static_cast<DWORD>(
+        reinterpret_cast<
+            ULONG_PTR
+        >(
+            info->InheritedFromUniqueProcessId
+        )
+    );
+
+process.handleCount =
+    static_cast<DWORD>(
+        info->HandleCount
+    );
 
         // ------------------------------------------------
         // Name
@@ -501,4 +514,257 @@ process.threadCount =
 
 
     return processes;
+}
+bool terminateTaskByPid(
+    DWORD pid)
+{
+    // --------------------------------------------------------
+    // Safety checks
+    // --------------------------------------------------------
+
+    if (
+        pid == 0 ||
+        pid == 4 ||
+        pid == GetCurrentProcessId()
+    )
+    {
+        return false;
+    }
+
+
+    // --------------------------------------------------------
+    // Get a fresh process snapshot
+    // --------------------------------------------------------
+
+    std::vector<ProcessInfo> processes =
+        getRunningProcesses();
+
+
+    // --------------------------------------------------------
+    // Find selected process
+    // --------------------------------------------------------
+
+    ProcessInfo* selectedProcess =
+        nullptr;
+
+    for (ProcessInfo& process : processes)
+    {
+        if (process.pid == pid)
+        {
+            selectedProcess =
+                &process;
+
+            break;
+        }
+    }
+
+    if (selectedProcess == nullptr)
+    {
+        return false;
+    }
+
+
+    // --------------------------------------------------------
+    // Find the application's root process
+    //
+    // Example:
+    // msedge.exe child
+    //     -> msedge.exe parent
+    //         -> msedge.exe root
+    // --------------------------------------------------------
+
+    DWORD rootPid =
+        selectedProcess->pid;
+
+    std::string rootName =
+        selectedProcess->name;
+
+
+    bool foundParent =
+        true;
+
+    while (foundParent)
+    {
+        foundParent =
+            false;
+
+        DWORD currentParentPid =
+            0;
+
+
+        for (const ProcessInfo& process : processes)
+        {
+            if (process.pid == rootPid)
+            {
+                currentParentPid =
+                    process.parentPid;
+
+                break;
+            }
+        }
+
+
+        if (
+            currentParentPid == 0 ||
+            currentParentPid == 4
+        )
+        {
+            break;
+        }
+
+
+        for (const ProcessInfo& process : processes)
+        {
+            if (
+                process.pid ==
+                    currentParentPid &&
+                process.name ==
+                    rootName
+            )
+            {
+                rootPid =
+                    process.pid;
+
+                foundParent =
+                    true;
+
+                break;
+            }
+        }
+    }
+
+
+    // --------------------------------------------------------
+    // Collect the whole child process tree
+    // --------------------------------------------------------
+
+    std::vector<DWORD> processTree;
+
+    processTree.push_back(
+        rootPid
+    );
+
+
+    for (size_t index = 0;
+         index < processTree.size();
+         index++)
+    {
+        DWORD parentPid =
+            processTree[index];
+
+
+        for (const ProcessInfo& process : processes)
+        {
+            if (
+                process.parentPid ==
+                    parentPid &&
+                process.pid != 0 &&
+                process.pid != 4 &&
+                process.pid !=
+                    GetCurrentProcessId()
+            )
+            {
+                bool alreadyAdded =
+                    false;
+
+                for (DWORD existingPid :
+                     processTree)
+                {
+                    if (
+                        existingPid ==
+                        process.pid
+                    )
+                    {
+                        alreadyAdded =
+                            true;
+
+                        break;
+                    }
+                }
+
+
+                if (!alreadyAdded)
+                {
+                    processTree.push_back(
+                        process.pid
+                    );
+                }
+            }
+        }
+    }
+
+
+    // --------------------------------------------------------
+    // Terminate children first, root last
+    // --------------------------------------------------------
+
+    bool terminatedSomething =
+        false;
+
+
+    for (
+        auto it =
+            processTree.rbegin();
+
+        it != processTree.rend();
+
+        ++it
+    )
+    {
+        DWORD processPid =
+            *it;
+
+
+        if (
+            processPid == 0 ||
+            processPid == 4 ||
+            processPid ==
+                GetCurrentProcessId()
+        )
+        {
+            continue;
+        }
+
+
+        HANDLE processHandle =
+            OpenProcess(
+                PROCESS_TERMINATE |
+                SYNCHRONIZE,
+                FALSE,
+                processPid
+            );
+
+
+        if (processHandle == nullptr)
+        {
+            continue;
+        }
+
+
+        BOOL result =
+            TerminateProcess(
+                processHandle,
+                1
+            );
+
+
+        if (result)
+        {
+            WaitForSingleObject(
+                processHandle,
+                1000
+            );
+
+            terminatedSomething =
+                true;
+        }
+
+
+        CloseHandle(
+            processHandle
+        );
+    }
+
+
+    return terminatedSomething;
 }

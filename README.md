@@ -72,3 +72,15 @@ Added:
 - Added live process count
 - Improved dashboard status indicator and overall UI layout
 - Combined uptime and desktop widget controls into a cleaner summary card
+### v0.6
+- Added advanced process monitoring
+- Added sortable PROCESS, CPU, MEMORY, THREADS, and PID columns
+- Added ascending and descending sorting
+- Added live process search and filtering
+- Added a clear search button and focused search state
+- Added process row hover and selection
+- Added selected-process details including Parent PID and handle count
+- Added live filtered process counts
+- Added END TASK with confirmation
+- Added process-tree termination for multi-process applications
+- Added safeguards for System Idle Process, System, and SysMon itself

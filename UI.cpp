@@ -5,6 +5,7 @@
 #include <sstream>
 #include <iomanip>
 #include "Processes.h"
+#include <cctype>
 
 extern HFONT titleFont;
 extern HFONT subtitleFont;
@@ -829,7 +830,7 @@ drawText(
 POINT oldOrigin;
 drawText(
     hdc,
-    "v0.5",
+    "v0.6",
     55,
     660,
     RGB(100, 108, 122),
@@ -899,7 +900,7 @@ if (currentPage != AppPage::Dashboard)
         35,
         115,
         915,
-        555,
+        610,
         card
     );
 
@@ -907,70 +908,281 @@ if (currentPage != AppPage::Dashboard)
 {
     std::vector<ProcessInfo> processes =
         getRunningProcesses();
+
+        int totalProcessCount =
+    static_cast<int>(
+        processes.size()
+    );
+
+      // --------------------------------------------------------
+// PROCESS SEARCH FILTER
+// --------------------------------------------------------
+
+if (!processSearch.empty())
+{
+    std::string searchLower =
+        processSearch;
+
+    std::transform(
+        searchLower.begin(),
+        searchLower.end(),
+        searchLower.begin(),
+        [](unsigned char c)
+        {
+            return static_cast<char>(
+                std::tolower(c)
+            );
+        }
+    );
+
+    processes.erase(
+        std::remove_if(
+            processes.begin(),
+            processes.end(),
+            [&](const ProcessInfo& process)
+            {
+                std::string nameLower =
+                    process.name;
+
+                std::transform(
+                    nameLower.begin(),
+                    nameLower.end(),
+                    nameLower.begin(),
+                    [](unsigned char c)
+                    {
+                        return static_cast<char>(
+                            std::tolower(c)
+                        );
+                    }
+                );
+
+                return nameLower.find(
+                    searchLower
+                ) == std::string::npos;
+            }
+        ),
+        processes.end()
+    );
+}  
 std::sort(
     processes.begin(),
     processes.end(),
     [](const ProcessInfo& a,
        const ProcessInfo& b)
     {
-        // Always keep System Idle Process first
-        if (a.pid == 0)
+        // Keep System Idle Process visible at the top
+        if (a.pid == 0 && b.pid != 0)
             return true;
 
-        if (b.pid == 0)
+        if (b.pid == 0 && a.pid != 0)
             return false;
 
-        // Everything else sorted by memory usage
-        return a.memoryMB >
-               b.memoryMB;
+
+        switch (processSort)
+        {
+        case ProcessSort::Name:
+            if (processSortDescending)
+            {
+                return a.name > b.name;
+            }
+
+            return a.name < b.name;
+
+
+        case ProcessSort::CPU:
+            if (processSortDescending)
+            {
+                return a.cpuPercent >
+                       b.cpuPercent;
+            }
+
+            return a.cpuPercent <
+                   b.cpuPercent;
+
+
+        case ProcessSort::Memory:
+            if (processSortDescending)
+            {
+                return a.memoryMB >
+                       b.memoryMB;
+            }
+
+            return a.memoryMB <
+                   b.memoryMB;
+
+
+        case ProcessSort::Threads:
+            if (processSortDescending)
+            {
+                return a.threadCount >
+                       b.threadCount;
+            }
+
+            return a.threadCount <
+                   b.threadCount;
+
+
+        case ProcessSort::PID:
+            if (processSortDescending)
+            {
+                return a.pid > b.pid;
+            }
+
+            return a.pid < b.pid;
+        }
+
+
+        return false;
     }
 );
+// --------------------------------------------------------
+// SEARCH BOX
+// --------------------------------------------------------
+
+if (processSearchFocused)
+{
+    // Blue focus border
+    drawRoundedBox(
+        hdc,
+        58,
+        118,
+        352,
+        147,
+        RGB(66, 135, 245)
+    );
+}
+
+// Search box background
+drawRoundedBox(
+    hdc,
+    60,
+    120,
+    350,
+    145,
+    RGB(36, 42, 54)
+);
+
+std::string searchDisplay;
+
+if (processSearch.empty())
+{
+    searchDisplay =
+        processSearchFocused
+        ? "|"
+        : "Search processes...";
+}
+else
+{
+    searchDisplay =
+        processSearch;
+
+    if (processSearchFocused)
+    {
+        searchDisplay += "|";
+    }
+}
+
+drawText(
+    hdc,
+    searchDisplay,
+    75,
+    126,
+    processSearch.empty()
+        ? RGB(100, 108, 122)
+        : textPrimary,
+    smallFont
+);
+if (!processSearch.empty())
+{
+    drawText(
+        hdc,
+        "X",
+        330,
+        126,
+        RGB(150, 157, 170),
+        smallFont
+    );
+}
+std::string nameHeader = "PROCESS";
+std::string cpuHeader = "CPU";
+std::string memoryHeader = "MEMORY";
+std::string threadsHeader = "THREADS";
+std::string pidHeader = "PID";
+
+std::string sortArrow =
+    processSortDescending
+    ? " v"
+    : " ^";
+switch (processSort)
+{
+case ProcessSort::Name:
+    nameHeader += sortArrow;
+    break;
+
+case ProcessSort::CPU:
+    cpuHeader += sortArrow;
+    break;
+
+case ProcessSort::Memory:
+    memoryHeader += sortArrow;
+    break;
+
+case ProcessSort::Threads:
+    threadsHeader += sortArrow;
+    break;
+
+case ProcessSort::PID:
+    pidHeader += sortArrow;
+    break;
+}
+
+
     // Table header
   drawText(
     hdc,
-    "PROCESS",
+   nameHeader,
     80,
-    155,
+    165,
     textSecondary,
     smallFont
 );
 
 drawText(
     hdc,
-    "CPU",
+    cpuHeader,
     470,
-    155,
+    165,
     textSecondary,
     smallFont
 );
 
 drawText(
     hdc,
-    "MEMORY",
+    memoryHeader,
     570,
-    155,
+    165,
     textSecondary,
     smallFont
 );
 
 drawText(
     hdc,
-    "THREADS",
+    threadsHeader,
     700,
-    155,
+    165,
     textSecondary,
     smallFont
 );
 
 drawText(
     hdc,
-    "PID",
+    pidHeader,
     820,
-    155,
+    165,
     textSecondary,
     smallFont
 );
-    int rowY = 195;
+    int rowY = 205;
 
    const int visibleRows = 12;
 
@@ -980,6 +1192,8 @@ int maxOffset =
         static_cast<int>(processes.size()) -
         visibleRows
     );
+    processMaxScrollOffset =
+    maxOffset;
 processScrollOffset =
     std::clamp(
         processScrollOffset,
@@ -992,21 +1206,70 @@ int endIndex =
         processScrollOffset + visibleRows,
         static_cast<int>(processes.size())
     );
+    visibleProcessPids.clear();
 for (
     int i = processScrollOffset;
     i < endIndex;
     i++
 )
-    {
-       drawText(
-    hdc,
-    processes[i].name,
-    
-    80,
-    rowY,
-    textPrimary,
-    smallFont
-);
+
+{
+    visibleProcessPids.push_back(
+        processes[i].pid
+    );
+
+// Hover highlight
+if (
+    processes[i].pid ==
+        hoveredProcessPid &&
+    processes[i].pid !=
+        selectedProcessPid
+)
+{
+    drawRoundedBox(
+        hdc,
+        65,
+        rowY - 5,
+        885,
+        rowY + 21,
+        RGB(31, 35, 44)
+    );
+}
+
+// Highlight selected process
+if (
+    processes[i].pid ==
+    selectedProcessPid
+)
+{
+    drawRoundedBox(
+        hdc,
+        65,
+        rowY - 5,
+        885,
+        rowY + 21,
+        RGB(36, 42, 54)
+    );
+
+    // Blue selection accent
+    drawRoundedBox(
+        hdc,
+        65,
+        rowY - 5,
+        70,
+        rowY + 21,
+        RGB(66, 135, 245)
+    );
+}
+
+    drawText(
+        hdc,
+        processes[i].name,
+        80,
+        rowY,
+        textPrimary,
+        smallFont
+    );
 // CPU usage
 std::string cpuText;
 
@@ -1103,11 +1366,264 @@ drawText(
         rowY += 27;
     }
 
-    std::string processCount =
+// --------------------------------------------------------
+// CUSTOM SCROLLBAR
+// --------------------------------------------------------
+
+const int scrollBarLeft = 895;
+const int scrollBarTop = 205;
+const int scrollBarRight = 905;
+const int scrollBarBottom = 529;
+
+const int arrowArea = 16;
+
+drawRoundedBox(
+    hdc,
+    scrollBarLeft,
+    scrollBarTop,
+    scrollBarRight,
+    scrollBarBottom,
+    RGB(24, 28, 36)
+);
+
+drawText(
+    hdc,
+    "^",
+    897,
+    206,
+    RGB(120, 128, 140),
+    smallFont
+);
+
+drawText(
+    hdc,
+    "v",
+    897,
+    512,
+    RGB(120, 128, 140),
+    smallFont
+);
+
+if (
+    static_cast<int>(
+        processes.size()
+    ) > visibleRows
+)
+{
+    int trackTop =
+        scrollBarTop + arrowArea;
+
+    int trackBottom =
+        scrollBarBottom - arrowArea;
+
+    int trackHeight =
+        trackBottom - trackTop;
+
+    double visibleRatio =
+        static_cast<double>(
+            visibleRows
+        ) /
+        static_cast<double>(
+            processes.size()
+        );
+
+    int thumbHeight =
+        static_cast<int>(
+            trackHeight *
+            visibleRatio
+        );
+
+    if (thumbHeight < 40)
+    {
+        thumbHeight = 40;
+    }
+
+    if (thumbHeight > trackHeight)
+    {
+        thumbHeight = trackHeight;
+    }
+
+    int thumbTravel =
+        trackHeight -
+        thumbHeight;
+
+    int thumbTop =
+        trackTop;
+
+    if (maxOffset > 0)
+    {
+        double scrollRatio =
+            static_cast<double>(
+                processScrollOffset
+            ) /
+            static_cast<double>(
+                maxOffset
+            );
+
+        thumbTop =
+            trackTop +
+            static_cast<int>(
+                scrollRatio *
+                thumbTravel
+            );
+    }
+int thumbBottom =
+    thumbTop + thumbHeight;
+
+processScrollbarThumbTop =
+    thumbTop;
+
+processScrollbarThumbBottom =
+    thumbBottom;
+    drawRoundedBox(
+        hdc,
+        scrollBarLeft + 1,
+        thumbTop,
+        scrollBarRight - 1,
+        thumbTop + thumbHeight,
+        RGB(110, 116, 128)
+    );
+}
+
+// --------------------------------------------------------
+// SELECTED PROCESS DETAILS
+// --------------------------------------------------------
+
+for (const ProcessInfo& process : processes)
+{
+    if (process.pid == selectedProcessPid)
+    {
+        drawRoundedBox(
+            hdc,
+            60,
+            530,
+            890,
+            590,
+            RGB(36, 42, 54)
+        );
+
+        // Process name
+        drawText(
+            hdc,
+            process.name,
+            75,
+            540,
+            textPrimary,
+            labelFont
+        );
+
+
+        // First details line
+        std::ostringstream detailsLine1;
+
+        detailsLine1
+            << "PID: "
+            << process.pid
+            << "     Parent PID: "
+            << process.parentPid
+            << "     Threads: "
+            << process.threadCount
+            << "     Handles: "
+            << process.handleCount;
+
+        drawText(
+            hdc,
+            detailsLine1.str(),
+            280,
+            540,
+            textSecondary,
+            smallFont
+        );
+
+
+        // Second details line
+        std::ostringstream detailsLine2;
+
+        if (process.pid == 0)
+        {
+            detailsLine2
+                << std::fixed
+                << std::setprecision(1)
+                << process.cpuPercent
+                << "% Idle";
+        }
+        else
+        {
+            detailsLine2
+                << std::fixed
+                << std::setprecision(1)
+                << process.cpuPercent
+                << "% CPU";
+        }
+
+        detailsLine2
+            << "     Memory: "
+            << std::fixed
+            << std::setprecision(1)
+            << process.memoryMB
+            << " MB";
+
+        drawText(
+            hdc,
+            detailsLine2.str(),
+            280,
+            563,
+            textSecondary,
+            smallFont
+        );
+
+
+        // End Task button
+        if (
+            process.pid != 0 &&
+            process.pid != 4 &&
+            process.pid != GetCurrentProcessId()
+        )
+        {
+            drawRoundedBox(
+                hdc,
+                735,
+                575,
+                875,
+                600,
+                RGB(150, 55, 55)
+            );
+
+            drawText(
+                hdc,
+                "END TASK",
+                770,
+                581,
+                RGB(245, 245, 245),
+                smallFont
+            );
+        }
+
+        break;
+    }
+}
+    std::string processCount;
+
+if (!processSearch.empty())
+{
+    processCount =
         std::to_string(
             processes.size()
         ) +
+        " of " +
+        std::to_string(
+            totalProcessCount
+        ) +
+        " processes";
+}
+else
+{
+    processCount =
+        std::to_string(
+            totalProcessCount
+        ) +
         " processes detected";
+}
 
     drawText(
         hdc,

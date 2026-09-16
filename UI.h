@@ -1,5 +1,5 @@
 #pragma once
-
+#include <vector>
 #include <windows.h>
 #include <string>
 
@@ -14,8 +14,32 @@ enum class AppPage
     Settings
 };
 
+extern std::vector<DWORD> visibleProcessPids;
 extern AppPage currentPage;
 extern int processScrollOffset;
+enum class ProcessSort
+{
+    Name,
+    CPU,
+    Memory,
+    Threads,
+    PID
+};
+
+extern ProcessSort processSort;
+extern bool processSortDescending;
+
+extern std::string processSearch;
+extern bool processSearchFocused;
+extern DWORD selectedProcessPid;
+extern DWORD hoveredProcessPid;
+extern int processMaxScrollOffset;
+extern int processScrollbarThumbTop;
+extern int processScrollbarThumbBottom;
+
+extern bool processScrollbarDragging;
+extern int processScrollbarDragOffsetY;
+
 void setFont(
     HDC hdc,
     HFONT font
