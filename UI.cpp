@@ -1,7 +1,7 @@
 #include "UI.h"
 #include "Stats.h"
 #include "Widget.h"
-
+#include <algorithm>
 #include <sstream>
 #include <iomanip>
 
@@ -162,6 +162,188 @@ void drawProgressBar(
         );
     }
 }
+
+void drawCpuGraph(
+    HDC hdc,
+    int x,
+    int y,
+    int width,
+    int height)
+{
+    if (cpuHistory.size() < 2)
+        return;
+
+
+    // Graph background
+    drawRoundedBox(
+        hdc,
+        x,
+        y,
+        x + width,
+        y + height,
+        RGB(24, 27, 34)
+    );
+
+
+    // Convert CPU samples into screen points
+    std::vector<POINT> points(
+        cpuHistory.size()
+    );
+
+    for (size_t i = 0;
+         i < cpuHistory.size();
+         i++)
+    {
+        double percent =
+            cpuHistory[i];
+
+        int pointX =
+            x +
+            static_cast<int>(
+                i *
+                static_cast<double>(width) /
+                (cpuHistory.size() - 1)
+            );
+
+        int pointY =
+            y +
+            height -
+            static_cast<int>(
+                (percent / 100.0) *
+                height
+            );
+
+        points[i].x = pointX;
+        points[i].y = pointY;
+    }
+
+
+    // Blue graph pen
+    HPEN graphPen =
+        CreatePen(
+            PS_SOLID,
+            2,
+            RGB(66, 135, 245)
+        );
+
+    HGDIOBJ oldPen =
+        SelectObject(
+            hdc,
+            graphPen
+        );
+
+
+    // If there are only two points,
+    // just draw a normal line.
+    if (points.size() == 2)
+    {
+        Polyline(
+            hdc,
+            points.data(),
+            2
+        );
+    }
+    else
+    {
+        // Convert the real data points into
+        // smooth Bezier curve segments.
+        std::vector<POINT> bezierPoints;
+
+        bezierPoints.push_back(
+            points[0]
+        );
+
+        for (size_t i = 0;
+             i < points.size() - 1;
+             i++)
+        {
+            POINT p0 =
+                (i == 0)
+                ? points[i]
+                : points[i - 1];
+
+            POINT p1 =
+                points[i];
+
+            POINT p2 =
+                points[i + 1];
+
+            POINT p3 =
+                (i + 2 < points.size())
+                ? points[i + 2]
+                : points[i + 1];
+
+
+            POINT control1;
+
+            control1.x =
+                p1.x +
+                (p2.x - p0.x) / 6;
+
+            control1.y =
+                p1.y +
+                (p2.y - p0.y) / 6;
+
+
+            POINT control2;
+
+            control2.x =
+                p2.x -
+                (p3.x - p1.x) / 6;
+
+            control2.y =
+                p2.y -
+                (p3.y - p1.y) / 6;
+
+
+        control1.y =
+    std::clamp<LONG>(
+        control1.y,
+        static_cast<LONG>(y),
+        static_cast<LONG>(y + height)
+    );
+
+control2.y =
+    std::clamp<LONG>(
+        control2.y,
+        static_cast<LONG>(y),
+        static_cast<LONG>(y + height)
+    );
+
+            bezierPoints.push_back(
+                control1
+            );
+
+            bezierPoints.push_back(
+                control2
+            );
+
+            bezierPoints.push_back(
+                p2
+            );
+        }
+
+
+        PolyBezier(
+            hdc,
+            bezierPoints.data(),
+            static_cast<DWORD>(
+                bezierPoints.size()
+            )
+        );
+    }
+
+
+    SelectObject(
+        hdc,
+        oldPen
+    );
+
+    DeleteObject(
+        graphPen
+    );
+}
+
 void drawDashboard(
     HWND hwnd,
     HDC hdc)
@@ -307,7 +489,13 @@ void drawDashboard(
         textPrimary,
         bigFont
     );
-
+drawCpuGraph(
+    hdc,
+    190,
+    170,
+    160,
+    65
+);
     drawProgressBar(
         hdc,
         60,

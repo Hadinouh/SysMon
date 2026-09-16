@@ -77,7 +77,7 @@ void restoreSysMon(HWND hwnd)
     SetTimer(
         hwnd,
         1,
-        1000,
+        500,
         nullptr
     );
 

@@ -16,3 +16,8 @@ extern ULONGLONG uptimeSeconds;
 
 double getCpuUsage();
 void updateStats();
+#include <vector>
+
+extern std::vector<double> cpuHistory;
+
+void addCpuHistorySample();

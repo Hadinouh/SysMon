@@ -1,10 +1,12 @@
 #include "Stats.h"
 
 #include <algorithm>
+#include <vector>
+
 
 
 double cpuUsage = 0.0;
-
+std::vector<double> cpuHistory;
 double usedRamGB = 0.0;
 double totalRamGB = 0.0;
 int ramPercent = 0;
@@ -102,13 +104,24 @@ double getCpuUsage()
     );
 }
 
+void addCpuHistorySample()
+{
+    cpuHistory.push_back(cpuUsage);
+
+    if (cpuHistory.size() > 120 )
+    {
+        cpuHistory.erase(
+            cpuHistory.begin()
+        );
+    }
+}
 
 void updateStats()
 {
     // CPU
     cpuUsage =
         getCpuUsage();
-
+addCpuHistorySample();
 
     // RAM
     MEMORYSTATUSEX memory = {};

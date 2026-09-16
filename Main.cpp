@@ -172,7 +172,7 @@ widgetValueFont =
         SetTimer(
             hwnd,
             1,
-            1000,
+            500,
             nullptr
         );
 
@@ -257,7 +257,7 @@ case WM_SIZE:
     SetTimer(
         desktopWidget,
         2,
-        1000,
+        500,
         nullptr
     );
 
