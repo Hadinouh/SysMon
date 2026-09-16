@@ -66,3 +66,13 @@ Added:
 =======
 - Reduced UI flickering
 >>>>>>> 9a9bd29 (Complete v0.5 dashboard and process UI)
+### v0.5
+- Redesigned the main dashboard with a modern sidebar layout
+- Added navigation for Dashboard, Processes, Performance, System Info, and Settings
+- Added a real-time Processes page
+- Displays process CPU usage, memory usage, thread count, and PID
+- Added support for System Idle Process and system-wide process information
+- Added scrolling through the running process list
+- Added live process count
+- Improved dashboard status indicator and overall UI layout
+- Combined uptime and desktop widget controls into a cleaner summary card

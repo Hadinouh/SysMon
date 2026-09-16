@@ -13,7 +13,6 @@
 AppPage currentPage =
     AppPage::Dashboard;
     int processScrollOffset = 0;
-
 void drawDashboard(
     HWND hwnd,
     HDC hdc

@@ -829,7 +829,7 @@ drawText(
 POINT oldOrigin;
 drawText(
     hdc,
-    "v0.5-dev",
+    "v0.5",
     55,
     660,
     RGB(100, 108, 122),
