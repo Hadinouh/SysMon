@@ -975,12 +975,11 @@ drawText(
    const int visibleRows = 12;
 
 int maxOffset =
-    std::max(
+    (std::max)(
         0,
         static_cast<int>(processes.size()) -
         visibleRows
     );
-
 processScrollOffset =
     std::clamp(
         processScrollOffset,
@@ -989,11 +988,10 @@ processScrollOffset =
     );
 
 int endIndex =
-    std::min(
+    (std::min)(
         processScrollOffset + visibleRows,
         static_cast<int>(processes.size())
     );
-
 for (
     int i = processScrollOffset;
     i < endIndex;
@@ -1041,7 +1039,7 @@ else
 drawText(
     hdc,
     cpuText,
-    500,
+    470,
     rowY,
     textSecondary,
     smallFont

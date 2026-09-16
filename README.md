@@ -61,4 +61,8 @@ Added:
 - Performance graph grid lines
 - Filled graph areas
 - Double-buffered dashboard rendering
+<<<<<<< HEAD
 - Reduced UI flickering
+=======
+- Reduced UI flickering
+>>>>>>> 9a9bd29 (Complete v0.5 dashboard and process UI)

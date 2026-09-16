@@ -3,6 +3,19 @@
 #include <windows.h>
 #include <string>
 
+
+
+enum class AppPage
+{
+    Dashboard,
+    Processes,
+    Performance,
+    SystemInfo,
+    Settings
+};
+
+extern AppPage currentPage;
+extern int processScrollOffset;
 void setFont(
     HDC hdc,
     HFONT font
