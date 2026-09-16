@@ -163,6 +163,81 @@ void drawProgressBar(
     }
 }
 
+void drawGraphGrid(
+    HDC hdc,
+    int x,
+    int y,
+    int width,
+    int height)
+{
+    HPEN gridPen =
+        CreatePen(
+            PS_SOLID,
+            1,
+            RGB(42, 46, 56)
+        );
+
+    HGDIOBJ oldPen =
+        SelectObject(
+            hdc,
+            gridPen
+        );
+
+
+    // Horizontal grid lines
+    for (int i = 1; i < 4; i++)
+    {
+        int lineY =
+            y +
+            (height * i / 4);
+
+        MoveToEx(
+            hdc,
+            x,
+            lineY,
+            nullptr
+        );
+
+        LineTo(
+            hdc,
+            x + width,
+            lineY
+        );
+    }
+
+
+    // Vertical grid lines
+    for (int i = 1; i < 4; i++)
+    {
+        int lineX =
+            x +
+            (width * i / 4);
+
+        MoveToEx(
+            hdc,
+            lineX,
+            y,
+            nullptr
+        );
+
+        LineTo(
+            hdc,
+            lineX,
+            y + height
+        );
+    }
+
+
+    SelectObject(
+        hdc,
+        oldPen
+    );
+
+    DeleteObject(
+        gridPen
+    );
+}
+
 void drawCpuGraph(
     HDC hdc,
     int x,
@@ -183,7 +258,13 @@ void drawCpuGraph(
         y + height,
         RGB(24, 27, 34)
     );
-
+drawGraphGrid(
+    hdc,
+    x,
+    y,
+    width,
+    height
+);
 
     // Convert CPU samples into screen points
     std::vector<POINT> points(
@@ -216,7 +297,61 @@ void drawCpuGraph(
         points[i].x = pointX;
         points[i].y = pointY;
     }
+std::vector<POINT> fillPoints =
+    points;
 
+fillPoints.push_back(
+    {
+        static_cast<LONG>(x + width),
+        static_cast<LONG>(y + height)
+    }
+);
+
+fillPoints.push_back(
+    {
+        static_cast<LONG>(x),
+        static_cast<LONG>(y + height)
+    }
+);
+
+HBRUSH fillBrush =
+    CreateSolidBrush(
+        RGB(30, 48, 75)
+    );
+
+HGDIOBJ oldBrush =
+    SelectObject(
+        hdc,
+        fillBrush
+    );
+
+HGDIOBJ oldFillPen =
+    SelectObject(
+        hdc,
+        GetStockObject(NULL_PEN)
+    );
+
+Polygon(
+    hdc,
+    fillPoints.data(),
+    static_cast<int>(
+        fillPoints.size()
+    )
+);
+
+SelectObject(
+    hdc,
+    oldFillPen
+);
+
+SelectObject(
+    hdc,
+    oldBrush
+);
+
+DeleteObject(
+    fillBrush
+);
 
     // Blue graph pen
     HPEN graphPen =
@@ -669,6 +804,24 @@ drawCpuGraph(
     160,
     65
 );
+drawText(
+    hdc,
+    "60s",
+    190,
+    236,
+    RGB(100, 108, 122),
+    smallFont
+);
+
+drawText(
+    hdc,
+    "NOW",
+    318,
+    236,
+    RGB(100, 108, 122),
+    smallFont
+);
+
     drawProgressBar(
         hdc,
         60,
@@ -721,6 +874,23 @@ drawRamGraph(
     170,
     160,
     65
+);
+drawText(
+    hdc,
+    "60s",
+    560,
+    236,
+    RGB(100, 108, 122),
+    smallFont
+);
+
+drawText(
+    hdc,
+    "NOW",
+    688,
+    236,
+    RGB(100, 108, 122),
+    smallFont
 );
     std::ostringstream ramInfo;
 

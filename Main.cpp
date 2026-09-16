@@ -406,28 +406,87 @@ case WM_TRAYICON:
 
     return 0;
 }
-    case WM_PAINT:
-    {
-        PAINTSTRUCT ps;
+   case WM_PAINT:
+{
+    PAINTSTRUCT ps;
 
-        HDC hdc =
-            BeginPaint(
-                hwnd,
-                &ps
-            );
-
-        drawDashboard(
-            hwnd,
-            hdc
-        );
-
-        EndPaint(
+    HDC hdc =
+        BeginPaint(
             hwnd,
             &ps
         );
 
-        return 0;
-    }
+    RECT client;
+
+    GetClientRect(
+        hwnd,
+        &client
+    );
+
+
+    // Create an off-screen drawing surface
+    HDC memoryDC =
+        CreateCompatibleDC(
+            hdc
+        );
+
+    HBITMAP memoryBitmap =
+        CreateCompatibleBitmap(
+            hdc,
+            client.right,
+            client.bottom
+        );
+
+    HGDIOBJ oldBitmap =
+        SelectObject(
+            memoryDC,
+            memoryBitmap
+        );
+
+
+    // Draw the entire dashboard off-screen
+    drawDashboard(
+        hwnd,
+        memoryDC
+    );
+
+
+    // Copy the finished frame to the window
+    BitBlt(
+        hdc,
+        0,
+        0,
+        client.right,
+        client.bottom,
+        memoryDC,
+        0,
+        0,
+        SRCCOPY
+    );
+
+
+    // Cleanup
+    SelectObject(
+        memoryDC,
+        oldBitmap
+    );
+
+    DeleteObject(
+        memoryBitmap
+    );
+
+    DeleteDC(
+        memoryDC
+    );
+
+
+    EndPaint(
+        hwnd,
+        &ps
+    );
+
+    return 0;
+}
 
 
     case WM_ERASEBKGND:
