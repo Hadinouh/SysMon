@@ -19,5 +19,7 @@ void updateStats();
 #include <vector>
 
 extern std::vector<double> cpuHistory;
+extern std::vector<double> ramHistory;
 
 void addCpuHistorySample();
+void addRamHistorySample();

@@ -7,6 +7,7 @@
 
 double cpuUsage = 0.0;
 std::vector<double> cpuHistory;
+std::vector<double> ramHistory;
 double usedRamGB = 0.0;
 double totalRamGB = 0.0;
 int ramPercent = 0;
@@ -116,6 +117,20 @@ void addCpuHistorySample()
     }
 }
 
+void addRamHistorySample()
+{
+    ramHistory.push_back(
+        static_cast<double>(ramPercent)
+    );
+
+    if (ramHistory.size() > 120)
+    {
+        ramHistory.erase(
+            ramHistory.begin()
+        );
+    }
+}
+
 void updateStats()
 {
     // CPU
@@ -154,8 +169,9 @@ addCpuHistorySample();
                  totalRamGB)
                 * 100.0
             );
-    }
 
+    }
+       addRamHistorySample();
 
     // Disk
     ULARGE_INTEGER freeAvailable;
