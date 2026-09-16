@@ -9,6 +9,11 @@
 #include "Tray.h"
 #include "Widget.h"
 #include "UI.h"
+
+AppPage currentPage =
+    AppPage::Dashboard;
+    int processScrollOffset = 0;
+
 void drawDashboard(
     HWND hwnd,
     HDC hdc
@@ -178,7 +183,38 @@ widgetValueFont =
 
         return 0;
     }
-    
+    case WM_MOUSEWHEEL:
+{
+    if (currentPage == AppPage::Processes)
+    {
+        short wheelDelta =
+            GET_WHEEL_DELTA_WPARAM(wParam);
+
+        if (wheelDelta < 0)
+        {
+            processScrollOffset += 3;
+        }
+        else
+        {
+            processScrollOffset -= 3;
+        }
+
+        if (processScrollOffset < 0)
+        {
+            processScrollOffset = 0;
+        }
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+    break;
+}
     case WM_LBUTTONDOWN:
     
 {
@@ -188,12 +224,117 @@ widgetValueFont =
     int mouseY =
         HIWORD(lParam);
 
-    if (
-        mouseX >= 610 &&
-        mouseX <= 755 &&
-        mouseY >= 573 &&
-        mouseY <= 605
-    )
+// Dashboard
+if (
+    mouseX >= 35 &&
+    mouseX <= 185 &&
+    mouseY >= 125 &&
+    mouseY <= 170
+)
+{
+    currentPage =
+        AppPage::Dashboard;
+
+    InvalidateRect(
+        hwnd,
+        nullptr,
+        FALSE
+    );
+
+    return 0;
+}
+
+
+// Processes
+if (
+    mouseX >= 35 &&
+    mouseX <= 185 &&
+    mouseY >= 175 &&
+    mouseY <= 220
+)
+{
+    currentPage =
+        AppPage::Processes;
+
+    InvalidateRect(
+        hwnd,
+        nullptr,
+        FALSE
+    );
+
+    return 0;
+}
+
+
+// Performance
+if (
+    mouseX >= 35 &&
+    mouseX <= 185 &&
+    mouseY >= 225 &&
+    mouseY <= 270
+)
+{
+    currentPage =
+        AppPage::Performance;
+
+    InvalidateRect(
+        hwnd,
+        nullptr,
+        FALSE
+    );
+
+    return 0;
+}
+
+
+// System Info
+if (
+    mouseX >= 35 &&
+    mouseX <= 185 &&
+    mouseY >= 275 &&
+    mouseY <= 320
+)
+{
+    currentPage =
+        AppPage::SystemInfo;
+
+    InvalidateRect(
+        hwnd,
+        nullptr,
+        FALSE
+    );
+
+    return 0;
+}
+
+
+// Settings
+if (
+    mouseX >= 35 &&
+    mouseX <= 185 &&
+    mouseY >= 325 &&
+    mouseY <= 370
+)
+{
+    currentPage =
+        AppPage::Settings;
+
+    InvalidateRect(
+        hwnd,
+        nullptr,
+        FALSE
+    );
+
+    return 0;
+}
+
+
+  if (
+    mouseX >= 875 &&
+    mouseX <= 1090 &&
+    mouseY >= 525 &&
+    mouseY <= 557
+)
     {
         widgetEnabled =
             !widgetEnabled;
@@ -602,8 +743,8 @@ if (!RegisterClassA(&widgetClass))
             CW_USEDEFAULT,
             CW_USEDEFAULT,
 
-            810,
-            625,
+            1200,
+            760,
 
             nullptr,
             nullptr,

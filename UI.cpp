@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
-
+#include "Processes.h"
 
 extern HFONT titleFont;
 extern HFONT subtitleFont;
@@ -697,15 +697,188 @@ void drawDashboard(
     DeleteObject(
         backgroundBrush
     );
+// --------------------------------------------------------
+// SIDEBAR
+// --------------------------------------------------------
+
+drawRoundedBox(
+    hdc,
+    20,
+    20,
+    220,
+    700,
+    RGB(24, 27, 34)
+);
+
+drawText(
+    hdc,
+    "SysMon",
+    45,
+    40,
+    textPrimary,
+    titleFont
+);
+
+drawText(
+    hdc,
+    "SYSTEM MONITOR",
+    47,
+    82,
+    textSecondary,
+    smallFont
+);
 
 
-    // --------------------------------------------------------
-    // Header
-    // --------------------------------------------------------
+// Navigation items
+int activeTop = 125;
+
+switch (currentPage)
+{
+case AppPage::Dashboard:
+    activeTop = 125;
+    break;
+
+case AppPage::Processes:
+    activeTop = 175;
+    break;
+
+case AppPage::Performance:
+    activeTop = 225;
+    break;
+
+case AppPage::SystemInfo:
+    activeTop = 275;
+    break;
+
+case AppPage::Settings:
+    activeTop = 325;
+    break;
+}
+
+drawRoundedBox(
+    hdc,
+    35,
+    activeTop,
+    185,
+    activeTop + 45,
+    RGB(36, 42, 54)
+);
+
+drawRoundedBox(
+    hdc,
+    35,
+    activeTop,
+    41,
+    activeTop + 45,
+    RGB(66, 135, 245)
+);
+drawText(
+    hdc,
+    "Dashboard",
+    55,
+    145,
+    currentPage == AppPage::Dashboard
+    ? textPrimary
+    : textSecondary,
+    labelFont
+);
+
+drawText(
+    hdc,
+    "Processes",
+    55,
+    195,
+    currentPage == AppPage::Processes
+    ? textPrimary
+    : textSecondary,
+    labelFont
+);
+
+drawText(
+    hdc,
+    "Performance",
+    55,
+    245,
+    currentPage == AppPage::Performance
+    ? textPrimary
+    : textSecondary,
+    labelFont
+);
+
+drawText(
+    hdc,
+    "System Info",
+    55,
+    295,
+   currentPage == AppPage::SystemInfo
+    ? textPrimary
+    : textSecondary,
+    labelFont
+);
+
+drawText(
+    hdc,
+    "Settings",
+    55,
+    345,
+    currentPage == AppPage::Settings
+    ? textPrimary
+    : textSecondary,
+    labelFont
+);
+POINT oldOrigin;
+drawText(
+    hdc,
+    "v0.5-dev",
+    55,
+    660,
+    RGB(100, 108, 122),
+    smallFont
+);
+SetViewportOrgEx(
+    hdc,
+    225,
+    0,
+    &oldOrigin
+);
+// --------------------------------------------------------
+// NON-DASHBOARD PAGES
+// --------------------------------------------------------
+
+if (currentPage != AppPage::Dashboard)
+{
+    std::string pageTitle;
+    std::string pageSubtitle;
+
+    switch (currentPage)
+    {
+    case AppPage::Processes:
+        pageTitle = "Processes";
+        pageSubtitle = "Running applications and background processes";
+        break;
+
+    case AppPage::Performance:
+        pageTitle = "Performance";
+        pageSubtitle = "Detailed system performance monitoring";
+        break;
+
+    case AppPage::SystemInfo:
+        pageTitle = "System Info";
+        pageSubtitle = "Hardware and operating system information";
+        break;
+
+    case AppPage::Settings:
+        pageTitle = "Settings";
+        pageSubtitle = "Configure SysMon preferences";
+        break;
+
+    default:
+        break;
+    }
 
     drawText(
         hdc,
-        "SysMon",
+        pageTitle,
         35,
         25,
         textPrimary,
@@ -714,64 +887,369 @@ void drawDashboard(
 
     drawText(
         hdc,
-        "Windows System Monitor",
+        pageSubtitle,
         37,
         68,
         textSecondary,
         subtitleFont
     );
 
+    drawRoundedBox(
+        hdc,
+        35,
+        115,
+        915,
+        555,
+        card
+    );
+
+  if (currentPage == AppPage::Processes)
+{
+    std::vector<ProcessInfo> processes =
+        getRunningProcesses();
+std::sort(
+    processes.begin(),
+    processes.end(),
+    [](const ProcessInfo& a,
+       const ProcessInfo& b)
+    {
+        // Always keep System Idle Process first
+        if (a.pid == 0)
+            return true;
+
+        if (b.pid == 0)
+            return false;
+
+        // Everything else sorted by memory usage
+        return a.memoryMB >
+               b.memoryMB;
+    }
+);
+    // Table header
+  drawText(
+    hdc,
+    "PROCESS",
+    80,
+    155,
+    textSecondary,
+    smallFont
+);
+
+drawText(
+    hdc,
+    "CPU",
+    470,
+    155,
+    textSecondary,
+    smallFont
+);
+
+drawText(
+    hdc,
+    "MEMORY",
+    570,
+    155,
+    textSecondary,
+    smallFont
+);
+
+drawText(
+    hdc,
+    "THREADS",
+    700,
+    155,
+    textSecondary,
+    smallFont
+);
+
+drawText(
+    hdc,
+    "PID",
+    820,
+    155,
+    textSecondary,
+    smallFont
+);
+    int rowY = 195;
+
+   const int visibleRows = 12;
+
+int maxOffset =
+    std::max(
+        0,
+        static_cast<int>(processes.size()) -
+        visibleRows
+    );
+
+processScrollOffset =
+    std::clamp(
+        processScrollOffset,
+        0,
+        maxOffset
+    );
+
+int endIndex =
+    std::min(
+        processScrollOffset + visibleRows,
+        static_cast<int>(processes.size())
+    );
+
+for (
+    int i = processScrollOffset;
+    i < endIndex;
+    i++
+)
+    {
+       drawText(
+    hdc,
+    processes[i].name,
+    
+    80,
+    rowY,
+    textPrimary,
+    smallFont
+);
+// CPU usage
+std::string cpuText;
+
+if (processes[i].cpuPercent >= 0.0)
+{
+    std::ostringstream cpuStream;
+
+    cpuStream
+        << std::fixed
+        << std::setprecision(1)
+        << processes[i].cpuPercent;
+
+    if (processes[i].pid == 0)
+    {
+        cpuStream << "% Idle";
+    }
+    else
+    {
+        cpuStream << "%";
+    }
+
+    cpuText =
+        cpuStream.str();
+}
+else
+{
+    cpuText = "--";
+}
+
+drawText(
+    hdc,
+    cpuText,
+    500,
+    rowY,
+    textSecondary,
+    smallFont
+);
+
+// Memory
+std::string memoryText;
+
+if (processes[i].pid == 0)
+{
+    memoryText = "0.0 MB";
+}
+else if (processes[i].memoryMB >= 0.0)
+{
+    std::ostringstream memoryStream;
+
+    memoryStream
+        << std::fixed
+        << std::setprecision(1)
+        << processes[i].memoryMB
+        << " MB";
+
+    memoryText =
+        memoryStream.str();
+}
+else
+{
+    memoryText = "N/A";
+}
+drawText(
+    hdc,
+    memoryText,
+    570,
+    rowY,
+    textSecondary,
+    smallFont
+);
+// Threads
+drawText(
+    hdc,
+    std::to_string(
+        processes[i].threadCount
+    ),
+    700,
+    rowY,
+    textSecondary,
+    smallFont
+);
+
+// PID
+drawText(
+    hdc,
+    std::to_string(
+        processes[i].pid
+    ),
+    820,
+    rowY,
+    textSecondary,
+    smallFont
+);
+        rowY += 27;
+    }
+
+    std::string processCount =
+        std::to_string(
+            processes.size()
+        ) +
+        " processes detected";
+
     drawText(
         hdc,
-        "LIVE",
-        690,
-        40,
-        green,
+        processCount,
+        680,
+        125,
+        textSecondary,
+        smallFont
+    );
+}
+else
+{
+    drawText(
+        hdc,
+        "This page is under development.",
+        70,
+        160,
+        textPrimary,
         labelFont
     );
 
-    HBRUSH liveBrush =
-        CreateSolidBrush(
-            green
-        );
-
-    HGDIOBJ oldBrush =
-        SelectObject(
-            hdc,
-            liveBrush
-        );
-
-    Ellipse(
+    drawText(
         hdc,
-        665,
-        43,
-        677,
-        55
+        "More features will be added in upcoming SysMon versions.",
+        70,
+        200,
+        textSecondary,
+        smallFont
+    );
+}
+    SetViewportOrgEx(
+        hdc,
+        oldOrigin.x,
+        oldOrigin.y,
+        nullptr
     );
 
+    return;
+}
+    // --------------------------------------------------------
+    // Header
+    // --------------------------------------------------------
+
+drawText(
+    hdc,
+    "Dashboard",
+    35,
+    25,
+    textPrimary,
+    titleFont
+);
+
+drawText(
+    hdc,
+    "Real-time system overview",
+    37,
+    68,
+    textSecondary,
+    subtitleFont
+);
+    drawRoundedBox(
+    hdc,
+    735,
+    28,
+    915,
+    68,
+    RGB(24, 45, 38)
+);
+
+HBRUSH statusBrush =
+    CreateSolidBrush(
+        green
+    );
+
+HGDIOBJ oldStatusBrush =
     SelectObject(
         hdc,
-        oldBrush
+        statusBrush
     );
 
-    DeleteObject(
-        liveBrush
+HPEN statusPen =
+    CreatePen(
+        PS_SOLID,
+        1,
+        green
     );
 
+HGDIOBJ oldStatusPen =
+    SelectObject(
+        hdc,
+        statusPen
+    );
+
+Ellipse(
+    hdc,
+    755,
+    43,
+    765,
+    53
+);
+
+SelectObject(
+    hdc,
+    oldStatusPen
+);
+
+SelectObject(
+    hdc,
+    oldStatusBrush
+);
+
+DeleteObject(
+    statusPen
+);
+
+DeleteObject(
+    statusBrush
+);
+
+drawText(
+    hdc,
+   "MONITORING ACTIVE",
+    780,
+    39,
+    green,
+    smallFont
+);
 
     // --------------------------------------------------------
     // CPU CARD
     // --------------------------------------------------------
 
-    drawRoundedBox(
-        hdc,
-        35,
-        115,
-        385,
-        300,
-        card
-    );
-
+drawRoundedBox(
+    hdc,
+    35,
+    115,
+    315,
+    300,
+    card
+);
     drawText(
         hdc,
         "CPU",
@@ -799,15 +1277,15 @@ void drawDashboard(
     );
 drawCpuGraph(
     hdc,
-    190,
+    145,
     170,
-    160,
+    145,
     65
 );
 drawText(
     hdc,
     "60s",
-    190,
+    145,
     236,
     RGB(100, 108, 122),
     smallFont
@@ -816,7 +1294,7 @@ drawText(
 drawText(
     hdc,
     "NOW",
-    318,
+    258,
     236,
     RGB(100, 108, 122),
     smallFont
@@ -826,7 +1304,7 @@ drawText(
         hdc,
         60,
         250,
-        300,
+        230,
         12,
         cpuUsage
     );
@@ -838,17 +1316,17 @@ drawText(
 
     drawRoundedBox(
         hdc,
-        405,
-        115,
-        755,
-        300,
+    335,
+    115,
+    615,
+    300,
         card
     );
 
     drawText(
         hdc,
         "MEMORY",
-        430,
+        360,
         140,
         textSecondary,
         labelFont
@@ -863,22 +1341,22 @@ drawText(
     drawText(
         hdc,
         ramPercentage.str(),
-        430,
+        360,
         180,
         textPrimary,
         bigFont
     );
 drawRamGraph(
     hdc,
-    560,
+    445,
     170,
-    160,
+    145,
     65
 );
 drawText(
     hdc,
     "60s",
-    560,
+    445,
     236,
     RGB(100, 108, 122),
     smallFont
@@ -887,7 +1365,7 @@ drawText(
 drawText(
     hdc,
     "NOW",
-    688,
+    558,
     236,
     RGB(100, 108, 122),
     smallFont
@@ -905,40 +1383,38 @@ drawText(
     drawText(
         hdc,
         ramInfo.str(),
-        430,
+        360,
         225,
         textSecondary,
         smallFont
     );
 
-    drawProgressBar(
-        hdc,
-        430,
-        250,
-        300,
-        12,
-        ramPercent
-    );
-
+drawProgressBar(
+    hdc,
+    360,
+    250,
+    230,
+    12,
+    ramPercent
+);
 
     // --------------------------------------------------------
     // DISK CARD
     // --------------------------------------------------------
 
     drawRoundedBox(
-        hdc,
-        35,
-        320,
-        755,
-        455,
-        card
-    );
-
+    hdc,
+    635,
+    115,
+    915,
+    300,
+    card
+);
     drawText(
         hdc,
         "DISK C:\\",
-        60,
-        345,
+        660,
+        140,
         textSecondary,
         labelFont
     );
@@ -952,8 +1428,8 @@ drawText(
     drawText(
         hdc,
         diskPercentage.str(),
-        655,
-        345,
+        845,
+        140,
         textPrimary,
         labelFont
     );
@@ -971,40 +1447,39 @@ drawText(
     drawText(
         hdc,
         diskInfo.str(),
-        60,
-        380,
+        660,
+        185,
         textPrimary,
         labelFont
     );
 
-    drawProgressBar(
-        hdc,
-        60,
-        420,
-        670,
-        12,
-        diskPercent
-    );
-
+drawProgressBar(
+    hdc,
+    660,
+    250,
+    230,
+    12,
+    diskPercent
+);
 
     // --------------------------------------------------------
     // UPTIME CARD
     // --------------------------------------------------------
 
-    drawRoundedBox(
-        hdc,
-        35,
-        475,
-        755,
-        555,
-        card
-    );
+drawRoundedBox(
+    hdc,
+    35,
+    475,
+    915,
+    585,
+    card
+);
 
     drawText(
         hdc,
         "SYSTEM UPTIME",
         60,
-        495,
+        500,
         textSecondary,
         smallFont
     );
@@ -1035,14 +1510,14 @@ drawText(
         << seconds
         << "s";
 
-    drawText(
-        hdc,
-        uptime.str(),
-        240,
-        495,
-        textPrimary,
-        labelFont
-    );
+   drawText(
+    hdc,
+    uptime.str(),
+    60,
+    530,
+    textPrimary,
+    labelFont
+);
 // --------------------------------------------------------
 // DESKTOP WIDGET TOGGLE
 // --------------------------------------------------------
@@ -1050,8 +1525,8 @@ drawText(
 drawText(
     hdc,
     "DESKTOP WIDGET",
-    430,
-    580,
+    650,
+    500,
     textSecondary,
     smallFont
 );
@@ -1072,10 +1547,10 @@ else
 
 drawRoundedBox(
     hdc,
-    610,
-    573,
-    755,
-    605,
+    650,
+    525,
+    865,
+    557,
     toggleColor
 );
 
@@ -1084,9 +1559,140 @@ drawText(
     widgetEnabled
         ? "ON"
         : "OFF",
-    665,
-    579,
+    745,
+    531,
     RGB(245, 245, 245),
     smallFont
 );
+// --------------------------------------------------------
+// GPU CARD
+// --------------------------------------------------------
+
+drawRoundedBox(
+    hdc,
+    35,
+    325,
+    315,
+    450,
+    card
+);
+
+drawText(
+    hdc,
+    "GPU",
+    60,
+    350,
+    textSecondary,
+    labelFont
+);
+
+drawRoundedBox(
+    hdc,
+    60,
+    395,
+    145,
+    425,
+    RGB(36, 42, 54)
+);
+
+drawText(
+    hdc,
+    "PLANNED",
+    75,
+    402,
+    textSecondary,
+    smallFont
+);
+
+
+// --------------------------------------------------------
+// NETWORK CARD
+// --------------------------------------------------------
+
+drawRoundedBox(
+    hdc,
+    335,
+    325,
+    615,
+    450,
+    card
+);
+
+drawText(
+    hdc,
+    "NETWORK",
+    360,
+    350,
+    textSecondary,
+    labelFont
+);
+
+drawRoundedBox(
+    hdc,
+    360,
+    395,
+    445,
+    425,
+    RGB(36, 42, 54)
+);
+
+drawText(
+    hdc,
+    "PLANNED",
+    375,
+    402,
+    textSecondary,
+    smallFont
+);
+
+
+// --------------------------------------------------------
+// TEMPERATURE CARD
+// --------------------------------------------------------
+
+drawRoundedBox(
+    hdc,
+    635,
+    325,
+    915,
+    450,
+    card
+);
+
+drawText(
+    hdc,
+    "TEMPERATURE",
+    660,
+    350,
+    textSecondary,
+    labelFont
+);
+
+drawRoundedBox(
+    hdc,
+    660,
+    395,
+    745,
+    425,
+    RGB(36, 42, 54)
+);
+
+drawText(
+    hdc,
+    "PLANNED",
+    675,
+    402,
+    textSecondary,
+    smallFont
+);
+
+
+// Restore normal drawing coordinates
+SetViewportOrgEx(
+    hdc,
+    oldOrigin.x,
+    oldOrigin.y,
+    nullptr
+);
+
 }
