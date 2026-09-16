@@ -46,3 +46,19 @@ The widget can be dragged anywhere on the desktop.
 Its position is automatically saved in `SysMon.ini` and restored the next time SysMon starts.
 
 The desktop widget can also be enabled or disabled from the main dashboard.
+### v0.4
+
+Added live performance graphs and smoother real-time monitoring.
+
+Added:
+
+- CPU usage history
+- RAM usage history
+- 120-sample history buffers
+- 500 ms performance sampling
+- Smooth Bezier graph rendering
+- 60-second graph timeline
+- Performance graph grid lines
+- Filled graph areas
+- Double-buffered dashboard rendering
+- Reduced UI flickering
