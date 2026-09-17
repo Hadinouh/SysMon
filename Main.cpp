@@ -28,6 +28,8 @@ bool processSortDescending =
     PerformanceView performanceView =
     PerformanceView::CPU;
     int selectedDiskIndex = 0;
+    int systemInfoScrollOffset = 0;
+    int systemInfoMaxScrollOffset = 0;
     std::string processSearch = "";
     bool processSearchFocused = false;
     DWORD selectedProcessPid = MAXDWORD;
@@ -356,6 +358,32 @@ case WM_MOUSEMOVE:
 
    case WM_MOUSEWHEEL:
 {
+    if (currentPage == AppPage::SystemInfo)
+    {
+        short wheelDelta =
+            GET_WHEEL_DELTA_WPARAM(
+                wParam
+            );
+
+        systemInfoScrollOffset -=
+            (wheelDelta / WHEEL_DELTA) * 70;
+
+        systemInfoScrollOffset =
+            std::clamp(
+                systemInfoScrollOffset,
+                0,
+                systemInfoMaxScrollOffset
+            );
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
     if (currentPage == AppPage::Processes)
     {
         short wheelDelta =
@@ -813,6 +841,8 @@ if (
         currentPage =
             AppPage::SystemInfo;
 
+        systemInfoScrollOffset = 0;
+
         InvalidateRect(
             hwnd,
             nullptr,
@@ -1200,6 +1230,24 @@ case WM_SIZE:
 
     return 0;
 }
+case WM_DEVICECHANGE:
+{
+    // Refresh the About PC connected-device / network data
+    // immediately when Windows reports a hardware change.
+    refreshSystemInfo(true);
+
+    if (currentPage == AppPage::SystemInfo)
+    {
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+    }
+
+    break;
+}
+
 case WM_TIMER:
 {
     if (wParam == 1)

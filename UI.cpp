@@ -1738,7 +1738,7 @@ drawText(
 
 drawText(
     hdc,
-    "System Info",
+    "About PC",
     55,
     295,
    currentPage == AppPage::SystemInfo
@@ -1794,8 +1794,8 @@ if (currentPage != AppPage::Dashboard)
         break;
 
     case AppPage::SystemInfo:
-        pageTitle = "System Info";
-        pageSubtitle = "Hardware and operating system information";
+        pageTitle = "About";
+        pageSubtitle = "Detailed information about your computer hardware and software.";
         break;
 
     case AppPage::Settings:
@@ -1825,7 +1825,8 @@ if (currentPage != AppPage::Dashboard)
         subtitleFont
     );
 
- if (currentPage != AppPage::Performance)
+ if (currentPage != AppPage::Performance &&
+    currentPage != AppPage::SystemInfo)
 {
     drawRoundedBox(
         hdc,
@@ -2566,6 +2567,1063 @@ else
         smallFont
     );
 }
+else if (currentPage == AppPage::SystemInfo)
+{
+    // --------------------------------------------------------
+    // ABOUT PC / SYSTEM INFORMATION PAGE
+    // --------------------------------------------------------
+
+    const COLORREF infoCard =
+        RGB(24, 27, 34);
+
+    const COLORREF infoAccent =
+        RGB(66, 135, 245);
+
+    const COLORREF infoPurple =
+        RGB(140, 80, 220);
+
+    const COLORREF infoGreen =
+        RGB(70, 200, 110);
+
+    const COLORREF infoCyan =
+        RGB(35, 190, 210);
+
+    const COLORREF infoOrange =
+        RGB(220, 140, 55);
+
+    const int leftX = 35;
+    const int leftRight = 465;
+    const int rightX = 480;
+    const int rightRight = 915;
+
+    auto fitInfoText =
+        [&](const std::string& source,
+            int maxWidth,
+            HFONT font)
+        -> std::string
+    {
+        if (source.empty())
+        {
+            return "--";
+        }
+
+        std::string text = source;
+
+        setFont(
+            hdc,
+            font
+        );
+
+        SIZE extent = {};
+
+        GetTextExtentPoint32A(
+            hdc,
+            text.c_str(),
+            static_cast<int>(
+                text.size()
+            ),
+            &extent
+        );
+
+        if (extent.cx <= maxWidth)
+        {
+            return text;
+        }
+
+        while (text.size() > 3)
+        {
+            text.pop_back();
+
+            std::string candidate =
+                text + "...";
+
+            GetTextExtentPoint32A(
+                hdc,
+                candidate.c_str(),
+                static_cast<int>(
+                    candidate.size()
+                ),
+                &extent
+            );
+
+            if (extent.cx <= maxWidth)
+            {
+                return candidate;
+            }
+        }
+
+        return "...";
+    };
+
+    auto drawInfoCard =
+        [&](int left,
+            int top,
+            int right,
+            int bottom,
+            const std::string& tag,
+            const std::string& title,
+            COLORREF accent)
+    {
+        drawRoundedBox(
+            hdc,
+            left,
+            top,
+            right,
+            bottom,
+            infoCard
+        );
+
+        drawRoundedBox(
+            hdc,
+            left + 18,
+            top + 15,
+            left + 57,
+            top + 48,
+            accent
+        );
+
+        drawText(
+            hdc,
+            tag,
+            left + 24,
+            top + 23,
+            RGB(245, 247, 250),
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            title,
+            left + 72,
+            top + 20,
+            textPrimary,
+            labelFont
+        );
+    };
+
+    auto drawInfoRow =
+        [&](int left,
+            int right,
+            int y,
+            const std::string& label,
+            const std::string& value,
+            int valueOffset = 170)
+    {
+        drawText(
+            hdc,
+            label,
+            left + 20,
+            y,
+            textSecondary,
+            smallFont
+        );
+
+        int valueX =
+            left + valueOffset;
+
+        drawText(
+            hdc,
+            fitInfoText(
+                value,
+                right - valueX - 15,
+                smallFont
+            ),
+            valueX,
+            y,
+            textPrimary,
+            smallFont
+        );
+    };
+
+    int deviceCount =
+        static_cast<int>(
+            systemInfo.connectedDevices.size()
+        );
+
+    int shownDeviceCount =
+        (std::min)(
+            deviceCount,
+            16
+        );
+
+    int deviceRows =
+        (shownDeviceCount + 1) / 2;
+
+    if (deviceRows < 2)
+    {
+        deviceRows = 2;
+    }
+
+    const int devicesTop = 945;
+    const int deviceCardHeight =
+        78 +
+        deviceRows * 38 +
+        (deviceCount > shownDeviceCount
+            ? 24
+            : 0);
+
+    const int devicesBottom =
+        devicesTop +
+        deviceCardHeight;
+
+    const int aboutTop =
+        devicesBottom + 15;
+
+    const int aboutBottom =
+        aboutTop + 95;
+
+    const int visibleTop = 105;
+    const int visibleBottom = 680;
+
+    systemInfoMaxScrollOffset =
+        (std::max)(
+            0,
+            aboutBottom -
+            visibleBottom
+        );
+
+    systemInfoScrollOffset =
+        std::clamp(
+            systemInfoScrollOffset,
+            0,
+            systemInfoMaxScrollOffset
+        );
+
+    int savedDc =
+        SaveDC(hdc);
+
+    IntersectClipRect(
+        hdc,
+        25,
+        visibleTop,
+        925,
+        visibleBottom
+    );
+
+    POINT currentOrigin = {};
+
+    GetViewportOrgEx(
+        hdc,
+        &currentOrigin
+    );
+
+    SetViewportOrgEx(
+        hdc,
+        currentOrigin.x,
+        currentOrigin.y -
+            systemInfoScrollOffset,
+        nullptr
+    );
+
+    // ----------------------------------------------------
+    // OPERATING SYSTEM
+    // ----------------------------------------------------
+    drawInfoCard(
+        leftX,
+        115,
+        leftRight,
+        365,
+        "OS",
+        "Operating System",
+        infoAccent
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        170,
+        "Name:",
+        systemInfo.osName
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        195,
+        "Version:",
+        systemInfo.osVersion
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        220,
+        "Installed on:",
+        systemInfo.installedOn
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        245,
+        "OS build:",
+        systemInfo.osBuild
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        270,
+        "Experience:",
+        systemInfo.experience
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        310,
+        "System type:",
+        systemInfo.systemType
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        335,
+        "PC name:",
+        systemInfo.computerName
+    );
+
+
+    // ----------------------------------------------------
+    // PROCESSOR
+    // ----------------------------------------------------
+    drawInfoCard(
+        rightX,
+        115,
+        rightRight,
+        365,
+        "CPU",
+        "Processor",
+        infoAccent
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        165,
+        "Name:",
+        systemInfo.cpuName,
+        145
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        187,
+        "Cores:",
+        systemInfo.cpuCores > 0
+            ? std::to_string(
+                systemInfo.cpuCores
+              )
+            : "--",
+        145
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        209,
+        "Threads:",
+        systemInfo.cpuThreads > 0
+            ? std::to_string(
+                systemInfo.cpuThreads
+              )
+            : "--",
+        145
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        231,
+        "Base speed:",
+        systemInfo.cpuBaseSpeed,
+        145
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        253,
+        "Current speed:",
+        systemInfo.cpuCurrentSpeed,
+        145
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        275,
+        "Socket:",
+        systemInfo.cpuSocket,
+        145
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        297,
+        "Virtualization:",
+        systemInfo.virtualization,
+        145
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        319,
+        "L1 / L2 cache:",
+        systemInfo.l1Cache +
+            " / " +
+            systemInfo.l2Cache,
+        145
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        341,
+        "L3 cache:",
+        systemInfo.l3Cache,
+        145
+    );
+
+
+    // ----------------------------------------------------
+    // MEMORY
+    // ----------------------------------------------------
+    drawInfoCard(
+        leftX,
+        380,
+        leftRight,
+        555,
+        "RAM",
+        "Memory",
+        infoPurple
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        435,
+        "Installed memory:",
+        systemInfo.installedMemory,
+        185
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        458,
+        "Type:",
+        systemInfo.memoryType,
+        185
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        481,
+        "Speed:",
+        systemInfo.memorySpeed,
+        185
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        504,
+        "Slots used:",
+        systemInfo.memorySlots,
+        185
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        527,
+        "Form factor:",
+        systemInfo.memoryFormFactor,
+        185
+    );
+
+
+    // ----------------------------------------------------
+    // GRAPHICS
+    // ----------------------------------------------------
+    drawInfoCard(
+        rightX,
+        380,
+        rightRight,
+        555,
+        "GPU",
+        "Graphics",
+        infoPurple
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        435,
+        "Name:",
+        systemInfo.gpuName,
+        145
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        458,
+        "Memory:",
+        systemInfo.gpuMemory,
+        145
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        481,
+        "Driver version:",
+        systemInfo.gpuDriverVersion,
+        145
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        504,
+        "Driver date:",
+        systemInfo.gpuDriverDate,
+        145
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        527,
+        "DirectX version:",
+        systemInfo.directXVersion,
+        145
+    );
+
+
+    // ----------------------------------------------------
+    // STORAGE
+    // ----------------------------------------------------
+    drawInfoCard(
+        leftX,
+        570,
+        leftRight,
+        760,
+        "DSK",
+        "Storage",
+        infoGreen
+    );
+
+    if (diskStats.empty())
+    {
+        drawText(
+            hdc,
+            "No physical disks detected.",
+            leftX + 20,
+            625,
+            textSecondary,
+            smallFont
+        );
+    }
+    else
+    {
+        int diskY = 625;
+        int visibleDisks =
+            (std::min)(
+                static_cast<int>(
+                    diskStats.size()
+                ),
+                3
+            );
+
+        for (int index = 0;
+             index < visibleDisks;
+             index++)
+        {
+            const DiskStats& disk =
+                diskStats[index];
+
+            drawText(
+                hdc,
+                fitInfoText(
+                    disk.displayName,
+                    115,
+                    smallFont
+                ),
+                leftX + 20,
+                diskY,
+                textPrimary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                fitInfoText(
+                    disk.model,
+                    185,
+                    smallFont
+                ),
+                leftX + 125,
+                diskY,
+                textPrimary,
+                smallFont
+            );
+
+            std::ostringstream capacity;
+
+            if (disk.capacityGB >= 1024.0)
+            {
+                capacity
+                    << std::fixed
+                    << std::setprecision(1)
+                    << (disk.capacityGB / 1024.0)
+                    << " TB";
+            }
+            else
+            {
+                capacity
+                    << std::fixed
+                    << std::setprecision(0)
+                    << disk.capacityGB
+                    << " GB";
+            }
+
+            drawText(
+                hdc,
+                fitInfoText(
+                    capacity.str() +
+                        " - " +
+                        disk.type,
+                    115,
+                    smallFont
+                ),
+                leftX + 315,
+                diskY,
+                textSecondary,
+                smallFont
+            );
+
+            diskY += 38;
+        }
+
+        if (static_cast<int>(diskStats.size()) >
+            visibleDisks)
+        {
+            drawText(
+                hdc,
+                "+" +
+                    std::to_string(
+                        static_cast<int>(
+                            diskStats.size()
+                        ) -
+                        visibleDisks
+                    ) +
+                    " more disk(s)",
+                leftX + 20,
+                735,
+                textSecondary,
+                smallFont
+            );
+        }
+    }
+
+
+    // ----------------------------------------------------
+    // NETWORK
+    // ----------------------------------------------------
+    drawInfoCard(
+        rightX,
+        570,
+        rightRight,
+        760,
+        "NET",
+        "Network",
+        infoCyan
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        625,
+        "Adapter:",
+        systemInfo.networkAdapter,
+        155
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        650,
+        "Connection type:",
+        systemInfo.networkConnectionType,
+        155
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        675,
+        "IPv4 address:",
+        systemInfo.ipv4Address,
+        155
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        700,
+        "IPv6 address:",
+        systemInfo.ipv6Address,
+        155
+    );
+
+
+    // ----------------------------------------------------
+    // SYSTEM / MOTHERBOARD
+    // ----------------------------------------------------
+    drawInfoCard(
+        leftX,
+        775,
+        leftRight,
+        930,
+        "MB",
+        "System / Motherboard",
+        infoOrange
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        830,
+        "System maker:",
+        systemInfo.systemManufacturer,
+        180
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        855,
+        "System model:",
+        systemInfo.systemModel,
+        180
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        880,
+        "Board maker:",
+        systemInfo.motherboardManufacturer,
+        180
+    );
+
+    drawInfoRow(
+        leftX,
+        leftRight,
+        905,
+        "Board model:",
+        systemInfo.motherboardModel,
+        180
+    );
+
+
+    // ----------------------------------------------------
+    // BIOS
+    // ----------------------------------------------------
+    drawInfoCard(
+        rightX,
+        775,
+        rightRight,
+        930,
+        "BIO",
+        "BIOS / Firmware",
+        infoOrange
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        830,
+        "Vendor:",
+        systemInfo.biosVendor,
+        145
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        855,
+        "Version:",
+        systemInfo.biosVersion,
+        145
+    );
+
+    drawInfoRow(
+        rightX,
+        rightRight,
+        880,
+        "Release date:",
+        systemInfo.biosDate,
+        145
+    );
+
+
+    // ----------------------------------------------------
+    // CONNECTED DEVICES
+    // ----------------------------------------------------
+    drawInfoCard(
+        leftX,
+        devicesTop,
+        rightRight,
+        devicesBottom,
+        "DEV",
+        "Connected Devices",
+        infoCyan
+    );
+
+    drawText(
+        hdc,
+        "Currently present USB, Bluetooth, HID, display and user-facing devices.",
+        leftX + 72,
+        devicesTop + 45,
+        textSecondary,
+        smallFont
+    );
+
+    if (shownDeviceCount == 0)
+    {
+        drawText(
+            hdc,
+            "No matching connected devices were detected.",
+            leftX + 20,
+            devicesTop + 82,
+            textSecondary,
+            smallFont
+        );
+    }
+    else
+    {
+        for (int index = 0;
+             index < shownDeviceCount;
+             index++)
+        {
+            int column =
+                index % 2;
+
+            int row =
+                index / 2;
+
+            int itemLeft =
+                column == 0
+                ? leftX + 20
+                : leftX + 455;
+
+            int itemWidth =
+                column == 0
+                ? 390
+                : 410;
+
+            int itemY =
+                devicesTop +
+                80 +
+                row * 38;
+
+            const ConnectedDeviceInfo& device =
+                systemInfo.connectedDevices[
+                    index
+                ];
+
+            drawText(
+                hdc,
+                "[" +
+                    device.type +
+                    "]",
+                itemLeft,
+                itemY,
+                infoAccent,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                fitInfoText(
+                    device.name,
+                    itemWidth - 105,
+                    smallFont
+                ),
+                itemLeft + 95,
+                itemY,
+                textPrimary,
+                smallFont
+            );
+        }
+
+        if (deviceCount > shownDeviceCount)
+        {
+            drawText(
+                hdc,
+                "+" +
+                    std::to_string(
+                        deviceCount -
+                        shownDeviceCount
+                    ) +
+                    " more connected device(s)",
+                leftX + 20,
+                devicesBottom - 28,
+                textSecondary,
+                smallFont
+            );
+        }
+    }
+
+
+    // ----------------------------------------------------
+    // SYSMON FOOTER CARD
+    // ----------------------------------------------------
+    drawRoundedBox(
+        hdc,
+        leftX,
+        aboutTop,
+        rightRight,
+        aboutBottom,
+        infoCard
+    );
+
+    drawRoundedBox(
+        hdc,
+        leftX + 20,
+        aboutTop + 18,
+        leftX + 70,
+        aboutTop + 68,
+        infoAccent
+    );
+
+    drawText(
+        hdc,
+        "SM",
+        leftX + 31,
+        aboutTop + 33,
+        RGB(245, 247, 250),
+        labelFont
+    );
+
+    drawText(
+        hdc,
+        "SysMon System Monitor",
+        leftX + 90,
+        aboutTop + 22,
+        textPrimary,
+        labelFont
+    );
+
+    drawText(
+        hdc,
+        "Version 0.8-dev",
+        leftX + 90,
+        aboutTop + 49,
+        textSecondary,
+        smallFont
+    );
+
+    drawText(
+        hdc,
+        "Real-time Windows hardware and software monitoring.",
+        560,
+        aboutTop + 38,
+        textSecondary,
+        smallFont
+    );
+
+    RestoreDC(
+        hdc,
+        savedDc
+    );
+
+
+    // ----------------------------------------------------
+    // PAGE SCROLLBAR
+    // ----------------------------------------------------
+    if (systemInfoMaxScrollOffset > 0)
+    {
+        const int barLeft = 905;
+        const int barTop = 115;
+        const int barBottom = 680;
+        const int barHeight =
+            barBottom - barTop;
+
+        drawRoundedBox(
+            hdc,
+            barLeft,
+            barTop,
+            barLeft + 7,
+            barBottom,
+            RGB(24, 28, 36)
+        );
+
+        double visibleRatio =
+            static_cast<double>(
+                visibleBottom -
+                visibleTop
+            ) /
+            static_cast<double>(
+                aboutBottom -
+                visibleTop
+            );
+
+        int thumbHeight =
+            static_cast<int>(
+                barHeight *
+                visibleRatio
+            );
+
+        thumbHeight =
+            std::clamp(
+                thumbHeight,
+                55,
+                barHeight
+            );
+
+        int thumbTravel =
+            barHeight -
+            thumbHeight;
+
+        int thumbTop =
+            barTop;
+
+        if (systemInfoMaxScrollOffset > 0)
+        {
+            thumbTop +=
+                static_cast<int>(
+                    static_cast<double>(
+                        systemInfoScrollOffset
+                    ) /
+                    static_cast<double>(
+                        systemInfoMaxScrollOffset
+                    ) *
+                    thumbTravel
+                );
+        }
+
+        drawRoundedBox(
+            hdc,
+            barLeft + 1,
+            thumbTop,
+            barLeft + 6,
+            thumbTop +
+                thumbHeight,
+            RGB(105, 115, 132)
+        );
+    }
+}
+
 else if (currentPage == AppPage::Performance)
 {
     // --------------------------------------------------------
