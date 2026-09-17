@@ -25,6 +25,9 @@ AppPage currentPage =
     ProcessSort::Memory;
 bool processSortDescending =
     true;
+    PerformanceView performanceView =
+    PerformanceView::CPU;
+    int selectedDiskIndex = 0;
     std::string processSearch = "";
     bool processSearchFocused = false;
     DWORD selectedProcessPid = MAXDWORD;
@@ -447,6 +450,150 @@ case WM_LBUTTONDOWN:
 
     int mouseY =
         HIWORD(lParam);
+        // --------------------------------------------------------
+// PERFORMANCE RESOURCE CARD CLICKS
+// --------------------------------------------------------
+
+if (
+    currentPage == AppPage::Performance &&
+    mouseX >= 280 &&
+    mouseX <= 460
+)
+{
+    // CPU
+    if (
+        mouseY >= 135 &&
+        mouseY <= 205
+    )
+    {
+        performanceView =
+            PerformanceView::CPU;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+    // Memory
+    if (
+        mouseY >= 225 &&
+        mouseY <= 295
+    )
+    {
+        performanceView =
+            PerformanceView::Memory;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+    // Physical disk cards
+    int visibleDiskCards =
+        performanceVisibleDiskCardCount(
+            diskStats.size()
+        );
+
+    for (
+        int index = 0;
+        index < visibleDiskCards;
+        index++
+    )
+    {
+        int top =
+            performanceDiskCardTop(
+                index
+            );
+
+        int bottom =
+            top +
+            performanceDiskCardHeight;
+
+        if (
+            mouseY >= top &&
+            mouseY <= bottom
+        )
+        {
+            performanceView =
+                PerformanceView::Disk;
+
+            if (
+                index <
+                static_cast<int>(
+                    diskStats.size()
+                )
+            )
+            {
+                selectedDiskIndex =
+                    index;
+            }
+
+            InvalidateRect(
+                hwnd,
+                nullptr,
+                FALSE
+            );
+
+            return 0;
+        }
+    }
+
+    int gpuTop =
+        performanceGpuCardTop(
+            diskStats.size()
+        );
+
+    if (
+        mouseY >= gpuTop &&
+        mouseY <=
+            gpuTop +
+            performanceDiskCardHeight
+    )
+    {
+        performanceView =
+            PerformanceView::GPU;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+    int networkTop =
+        performanceNetworkCardTop(
+            diskStats.size()
+        );
+
+    if (
+        mouseY >= networkTop &&
+        mouseY <=
+            networkTop +
+            performanceDiskCardHeight
+    )
+    {
+        performanceView =
+            PerformanceView::Network;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+}
 // --------------------------------------------------------
 // PROCESS SCROLLBAR
 // --------------------------------------------------------
@@ -1059,6 +1206,16 @@ case WM_TIMER:
     {
         // Read fresh CPU, RAM, disk and uptime values
         updateStats();
+
+        if (
+            selectedDiskIndex >=
+                static_cast<int>(
+                    diskStats.size()
+                )
+        )
+        {
+            selectedDiskIndex = 0;
+        }
 
         // Refresh the main dashboard if it is open
         if (IsWindowVisible(hwnd))

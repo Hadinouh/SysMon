@@ -6,12 +6,457 @@
 #include <iomanip>
 #include "Processes.h"
 #include <cctype>
+#include <psapi.h>
+#include <vector>
+#include <string>
 
 extern HFONT titleFont;
 extern HFONT subtitleFont;
 extern HFONT labelFont;
 extern HFONT bigFont;
 extern HFONT smallFont;
+
+
+struct MemoryPerformanceDetails
+{
+    bool valid = false;
+    unsigned long long commitTotalBytes = 0;
+    unsigned long long commitLimitBytes = 0;
+    unsigned long long cachedBytes = 0;
+    unsigned long long pagedPoolBytes = 0;
+    unsigned long long nonPagedPoolBytes = 0;
+};
+
+
+struct MemoryHardwareDetails
+{
+    DWORD speedMTs = 0;
+    int usedSlots = 0;
+    int totalSlots = 0;
+    std::string formFactor = "--";
+    bool hardwareReservedValid = false;
+    unsigned long long hardwareReservedBytes = 0;
+};
+
+
+static WORD readSmbiosWord(
+    const BYTE* data)
+{
+    return static_cast<WORD>(
+        static_cast<WORD>(data[0]) |
+        static_cast<WORD>(data[1] << 8)
+    );
+}
+
+
+static std::string memoryFormFactorName(
+    BYTE formFactor)
+{
+    switch (formFactor)
+    {
+    case 0x03: return "SIMM";
+    case 0x04: return "SIP";
+    case 0x05: return "Chip";
+    case 0x06: return "DIP";
+    case 0x07: return "ZIP";
+    case 0x08: return "Card";
+    case 0x09: return "DIMM";
+    case 0x0A: return "TSOP";
+    case 0x0B: return "Row of chips";
+    case 0x0C: return "RIMM";
+    case 0x0D: return "SODIMM";
+    case 0x0E: return "SRIMM";
+    case 0x0F: return "FB-DIMM";
+    case 0x10: return "Die";
+    default:   return "--";
+    }
+}
+
+
+static std::string formatMemoryBytes(
+    unsigned long long bytes)
+{
+    std::ostringstream stream;
+
+    const double megabyte =
+        1024.0 * 1024.0;
+
+    const double gigabyte =
+        1024.0 * 1024.0 * 1024.0;
+
+    if (bytes >=
+        1024ULL * 1024ULL * 1024ULL)
+    {
+        stream
+            << std::fixed
+            << std::setprecision(1)
+            << (bytes / gigabyte)
+            << " GB";
+    }
+    else
+    {
+        stream
+            << std::fixed
+            << std::setprecision(0)
+            << (bytes / megabyte)
+            << " MB";
+    }
+
+    return stream.str();
+}
+
+
+static std::string formatMemoryGigabyteNumber(
+    unsigned long long bytes)
+{
+    std::ostringstream stream;
+
+    stream
+        << std::fixed
+        << std::setprecision(1)
+        << (
+            bytes /
+            (1024.0 * 1024.0 * 1024.0)
+        );
+
+    return stream.str();
+}
+
+
+static MemoryPerformanceDetails
+getMemoryPerformanceDetails()
+{
+    MemoryPerformanceDetails details;
+
+    using GetPerformanceInfoFn =
+        BOOL (WINAPI *)(
+            PPERFORMANCE_INFORMATION,
+            DWORD
+        );
+
+    static HMODULE psapiModule =
+        LoadLibraryA(
+            "psapi.dll"
+        );
+
+    static GetPerformanceInfoFn
+        getPerformanceInfoFn =
+            psapiModule
+            ? reinterpret_cast<
+                GetPerformanceInfoFn
+              >(
+                GetProcAddress(
+                    psapiModule,
+                    "GetPerformanceInfo"
+                )
+              )
+            : nullptr;
+
+    if (getPerformanceInfoFn == nullptr)
+    {
+        return details;
+    }
+
+    PERFORMANCE_INFORMATION info = {};
+
+    if (!getPerformanceInfoFn(
+            &info,
+            sizeof(info)
+        ))
+    {
+        return details;
+    }
+
+    const unsigned long long pageSize =
+        static_cast<unsigned long long>(
+            info.PageSize
+        );
+
+    details.commitTotalBytes =
+        static_cast<unsigned long long>(
+            info.CommitTotal
+        ) * pageSize;
+
+    details.commitLimitBytes =
+        static_cast<unsigned long long>(
+            info.CommitLimit
+        ) * pageSize;
+
+    details.cachedBytes =
+        static_cast<unsigned long long>(
+            info.SystemCache
+        ) * pageSize;
+
+    details.pagedPoolBytes =
+        static_cast<unsigned long long>(
+            info.KernelPaged
+        ) * pageSize;
+
+    details.nonPagedPoolBytes =
+        static_cast<unsigned long long>(
+            info.KernelNonpaged
+        ) * pageSize;
+
+    details.valid = true;
+
+    return details;
+}
+
+
+static MemoryHardwareDetails
+queryMemoryHardwareDetails()
+{
+    MemoryHardwareDetails details;
+
+    struct RawSmbiosHeader
+    {
+        BYTE used20CallingMethod;
+        BYTE majorVersion;
+        BYTE minorVersion;
+        BYTE dmiRevision;
+        DWORD length;
+    };
+
+    const DWORD rawSmbiosProvider =
+        0x52534D42UL; // 'RSMB' without a multi-character literal warning
+
+    UINT firmwareSize =
+        GetSystemFirmwareTable(
+            rawSmbiosProvider,
+            0,
+            nullptr,
+            0
+        );
+
+    if (firmwareSize >=
+        sizeof(RawSmbiosHeader))
+    {
+        std::vector<BYTE> firmware(
+            firmwareSize
+        );
+
+        if (GetSystemFirmwareTable(
+                rawSmbiosProvider,
+                0,
+                firmware.data(),
+                firmwareSize
+            ) == firmwareSize)
+        {
+            const RawSmbiosHeader* raw =
+                reinterpret_cast<
+                    const RawSmbiosHeader*
+                >(
+                    firmware.data()
+                );
+
+            const BYTE* table =
+                firmware.data() +
+                sizeof(RawSmbiosHeader);
+
+            size_t availableTableBytes =
+                firmware.size() -
+                sizeof(RawSmbiosHeader);
+
+            size_t tableLength =
+                static_cast<size_t>(
+                    raw->length
+                );
+
+            if (tableLength >
+                availableTableBytes)
+            {
+                tableLength =
+                    availableTableBytes;
+            }
+
+            size_t offset = 0;
+            int type17Count = 0;
+
+            while (offset + 4 <=
+                   tableLength)
+            {
+                const BYTE* structure =
+                    table + offset;
+
+                BYTE type = structure[0];
+                BYTE length = structure[1];
+
+                if (length < 4 ||
+                    offset + length >
+                    tableLength)
+                {
+                    break;
+                }
+
+                if (type == 16 &&
+                    length >= 0x0F)
+                {
+                    WORD slotCount =
+                        readSmbiosWord(
+                            structure + 0x0D
+                        );
+
+                    if (slotCount > 0 &&
+                        slotCount != 0xFFFF &&
+                        slotCount >
+                        details.totalSlots)
+                    {
+                        details.totalSlots =
+                            slotCount;
+                    }
+                }
+                else if (type == 17 &&
+                         length >= 0x0F)
+                {
+                    type17Count++;
+
+                    WORD sizeField =
+                        readSmbiosWord(
+                            structure + 0x0C
+                        );
+
+                    bool populated =
+                        sizeField != 0 &&
+                        sizeField != 0xFFFF;
+
+                    if (populated)
+                    {
+                        details.usedSlots++;
+
+                        if (details.formFactor ==
+                            "--")
+                        {
+                            details.formFactor =
+                                memoryFormFactorName(
+                                    structure[0x0E]
+                                );
+                        }
+
+                        DWORD speed = 0;
+
+                        if (length >= 0x22)
+                        {
+                            WORD configuredSpeed =
+                                readSmbiosWord(
+                                    structure + 0x20
+                                );
+
+                            if (configuredSpeed != 0 &&
+                                configuredSpeed !=
+                                0xFFFF)
+                            {
+                                speed =
+                                    configuredSpeed;
+                            }
+                        }
+
+                        if (speed == 0 &&
+                            length >= 0x17)
+                        {
+                            WORD reportedSpeed =
+                                readSmbiosWord(
+                                    structure + 0x15
+                                );
+
+                            if (reportedSpeed != 0 &&
+                                reportedSpeed !=
+                                0xFFFF)
+                            {
+                                speed =
+                                    reportedSpeed;
+                            }
+                        }
+
+                        if (speed >
+                            details.speedMTs)
+                        {
+                            details.speedMTs = speed;
+                        }
+                    }
+                }
+
+                if (type == 127)
+                {
+                    break;
+                }
+
+                size_t next =
+                    offset + length;
+
+                while (
+                    next + 1 < tableLength &&
+                    !(
+                        table[next] == 0 &&
+                        table[next + 1] == 0
+                    )
+                )
+                {
+                    next++;
+                }
+
+                if (next + 1 >=
+                    tableLength)
+                {
+                    break;
+                }
+
+                offset = next + 2;
+            }
+
+            if (details.totalSlots == 0)
+            {
+                details.totalSlots =
+                    type17Count;
+            }
+        }
+    }
+
+    ULONGLONG installedMemoryKB = 0;
+
+    MEMORYSTATUSEX memoryStatus = {};
+    memoryStatus.dwLength =
+        sizeof(memoryStatus);
+
+    if (GetPhysicallyInstalledSystemMemory(
+            &installedMemoryKB
+        ) &&
+        GlobalMemoryStatusEx(
+            &memoryStatus
+        ))
+    {
+        unsigned long long installedBytes =
+            static_cast<unsigned long long>(
+                installedMemoryKB
+            ) * 1024ULL;
+
+        unsigned long long usableBytes =
+            static_cast<unsigned long long>(
+                memoryStatus.ullTotalPhys
+            );
+
+        details.hardwareReservedValid = true;
+
+        if (installedBytes > usableBytes)
+        {
+            details.hardwareReservedBytes =
+                installedBytes -
+                usableBytes;
+        }
+    }
+
+    return details;
+}
+
+
+static const MemoryHardwareDetails&
+getMemoryHardwareDetails()
+{
+    static const MemoryHardwareDetails
+        details =
+            queryMemoryHardwareDetails();
+
+    return details;
+}
 
 
 void setFont(
@@ -499,6 +944,14 @@ void drawRamGraph(
         RGB(24, 27, 34)
     );
 
+    drawGraphGrid(
+        hdc,
+        x,
+        y,
+        width,
+        height
+    );
+
 
     std::vector<POINT> points(
         ramHistory.size()
@@ -530,13 +983,82 @@ void drawRamGraph(
         points[i].x = pointX;
         points[i].y = pointY;
     }
+// --------------------------------------------------------
+// PURPLE FILL UNDER MEMORY GRAPH
+// --------------------------------------------------------
 
+std::vector<POINT> fillPoints =
+    points;
+
+fillPoints.push_back(
+    {
+        static_cast<LONG>(x + width),
+        static_cast<LONG>(y + height)
+    }
+);
+
+fillPoints.push_back(
+    {
+        static_cast<LONG>(x),
+        static_cast<LONG>(y + height)
+    }
+);
+
+HBRUSH memoryFillBrush =
+    CreateSolidBrush(
+        RGB(60, 38, 95)
+    );
+
+HGDIOBJ oldMemoryBrush =
+    SelectObject(
+        hdc,
+        memoryFillBrush
+    );
+
+HGDIOBJ oldMemoryFillPen =
+    SelectObject(
+        hdc,
+        GetStockObject(NULL_PEN)
+    );
+
+Polygon(
+    hdc,
+    fillPoints.data(),
+    static_cast<int>(
+        fillPoints.size()
+    )
+);
+
+SelectObject(
+    hdc,
+    oldMemoryFillPen
+);
+
+SelectObject(
+    hdc,
+    oldMemoryBrush
+);
+
+DeleteObject(
+    memoryFillBrush
+);
+
+
+// Draw the grid again so it stays visible
+// above the purple filled area.
+drawGraphGrid(
+    hdc,
+    x,
+    y,
+    width,
+    height
+);
 
     HPEN graphPen =
         CreatePen(
             PS_SOLID,
             2,
-            RGB(66, 135, 245)
+            RGB(140, 80, 220)
         );
 
     HGDIOBJ oldPen =
@@ -653,6 +1175,414 @@ void drawRamGraph(
         graphPen
     );
 }
+
+void drawCurrentPercentGraph(
+    HDC hdc,
+    int x,
+    int y,
+    int width,
+    int height,
+    double percent,
+    COLORREF lineColor,
+    COLORREF fillColor)
+{
+    double clampedPercent =
+        std::clamp(
+            percent,
+            0.0,
+            100.0
+        );
+
+    drawRoundedBox(
+        hdc,
+        x,
+        y,
+        x + width,
+        y + height,
+        RGB(20, 24, 30)
+    );
+
+    drawGraphGrid(
+        hdc,
+        x,
+        y,
+        width,
+        height
+    );
+
+    int lineY =
+        y +
+        height -
+        static_cast<int>(
+            (
+                clampedPercent /
+                100.0
+            ) *
+            height
+        );
+
+    POINT fillPoints[4] =
+    {
+        {
+            static_cast<LONG>(x),
+            static_cast<LONG>(lineY)
+        },
+        {
+            static_cast<LONG>(x + width),
+            static_cast<LONG>(lineY)
+        },
+        {
+            static_cast<LONG>(x + width),
+            static_cast<LONG>(y + height)
+        },
+        {
+            static_cast<LONG>(x),
+            static_cast<LONG>(y + height)
+        }
+    };
+
+    HBRUSH fillBrush =
+        CreateSolidBrush(
+            fillColor
+        );
+
+    HGDIOBJ oldBrush =
+        SelectObject(
+            hdc,
+            fillBrush
+        );
+
+    HGDIOBJ oldFillPen =
+        SelectObject(
+            hdc,
+            GetStockObject(NULL_PEN)
+        );
+
+    Polygon(
+        hdc,
+        fillPoints,
+        4
+    );
+
+    SelectObject(
+        hdc,
+        oldFillPen
+    );
+
+    SelectObject(
+        hdc,
+        oldBrush
+    );
+
+    DeleteObject(
+        fillBrush
+    );
+
+    HPEN graphPen =
+        CreatePen(
+            PS_SOLID,
+            2,
+            lineColor
+        );
+
+    HGDIOBJ oldPen =
+        SelectObject(
+            hdc,
+            graphPen
+        );
+
+    MoveToEx(
+        hdc,
+        x,
+        lineY,
+        nullptr
+    );
+
+    LineTo(
+        hdc,
+        x + width,
+        lineY
+    );
+
+    SelectObject(
+        hdc,
+        oldPen
+    );
+
+    DeleteObject(
+        graphPen
+    );
+}
+
+
+static void drawDiskHistoryGraph(
+    HDC hdc,
+    int x,
+    int y,
+    int width,
+    int height,
+    const std::vector<double>& history,
+    double scaleMaximum,
+    COLORREF lineColor,
+    COLORREF fillColor)
+{
+    drawRoundedBox(
+        hdc,
+        x,
+        y,
+        x + width,
+        y + height,
+        RGB(20, 24, 30)
+    );
+
+    drawGraphGrid(
+        hdc,
+        x,
+        y,
+        width,
+        height
+    );
+
+    if (
+        history.size() < 2 ||
+        scaleMaximum <= 0.0
+    )
+    {
+        return;
+    }
+
+    std::vector<POINT> points(
+        history.size()
+    );
+
+    for (
+        size_t i = 0;
+        i < history.size();
+        i++
+    )
+    {
+        double value =
+            std::clamp(
+                history[i],
+                0.0,
+                scaleMaximum
+            );
+
+        points[i].x =
+            x +
+            static_cast<int>(
+                i *
+                static_cast<double>(width) /
+                (history.size() - 1)
+            );
+
+        points[i].y =
+            y +
+            height -
+            static_cast<int>(
+                (value /
+                 scaleMaximum) *
+                height
+            );
+    }
+
+    std::vector<POINT> fillPoints =
+        points;
+
+    fillPoints.push_back(
+        {
+            static_cast<LONG>(x + width),
+            static_cast<LONG>(y + height)
+        }
+    );
+
+    fillPoints.push_back(
+        {
+            static_cast<LONG>(x),
+            static_cast<LONG>(y + height)
+        }
+    );
+
+    HBRUSH fillBrush =
+        CreateSolidBrush(
+            fillColor
+        );
+
+    HGDIOBJ oldBrush =
+        SelectObject(
+            hdc,
+            fillBrush
+        );
+
+    HGDIOBJ oldFillPen =
+        SelectObject(
+            hdc,
+            GetStockObject(NULL_PEN)
+        );
+
+    Polygon(
+        hdc,
+        fillPoints.data(),
+        static_cast<int>(
+            fillPoints.size()
+        )
+    );
+
+    SelectObject(
+        hdc,
+        oldFillPen
+    );
+
+    SelectObject(
+        hdc,
+        oldBrush
+    );
+
+    DeleteObject(
+        fillBrush
+    );
+
+    drawGraphGrid(
+        hdc,
+        x,
+        y,
+        width,
+        height
+    );
+
+    HPEN graphPen =
+        CreatePen(
+            PS_SOLID,
+            2,
+            lineColor
+        );
+
+    HGDIOBJ oldPen =
+        SelectObject(
+            hdc,
+            graphPen
+        );
+
+    Polyline(
+        hdc,
+        points.data(),
+        static_cast<int>(
+            points.size()
+        )
+    );
+
+    SelectObject(
+        hdc,
+        oldPen
+    );
+
+    DeleteObject(
+        graphPen
+    );
+}
+
+
+static double getDiskTransferGraphScale(
+    const DiskStats& disk)
+{
+    double maximum =
+        disk.readMBps +
+        disk.writeMBps;
+
+    for (double value :
+         disk.transferHistory)
+    {
+        if (value > maximum)
+        {
+            maximum = value;
+        }
+    }
+
+    const double scales[] =
+    {
+        1.0,
+        5.0,
+        10.0,
+        25.0,
+        50.0,
+        100.0,
+        250.0,
+        500.0,
+        1000.0,
+        2000.0,
+        5000.0,
+        10000.0
+    };
+
+    double target =
+        maximum * 1.15;
+
+    for (double scale : scales)
+    {
+        if (target <= scale)
+        {
+            return scale;
+        }
+    }
+
+    return
+        (std::max)(
+            10000.0,
+            target
+        );
+}
+
+
+static std::string formatDiskSpeed(
+    double megabytesPerSecond)
+{
+    std::ostringstream stream;
+
+    if (megabytesPerSecond >= 1024.0)
+    {
+        stream
+            << std::fixed
+            << std::setprecision(1)
+            << (megabytesPerSecond / 1024.0)
+            << " GB/s";
+    }
+    else
+    {
+        stream
+            << std::fixed
+            << std::setprecision(1)
+            << megabytesPerSecond
+            << " MB/s";
+    }
+
+    return stream.str();
+}
+
+
+static std::string formatDiskCapacity(
+    double gigabytes)
+{
+    if (gigabytes <= 0.0)
+    {
+        return "--";
+    }
+
+    std::ostringstream stream;
+
+    stream
+        << std::fixed
+        << std::setprecision(
+            gigabytes >= 100.0
+            ? 0
+            : 1
+        )
+        << gigabytes
+        << " GB";
+
+    return stream.str();
+}
+
+
 void drawDashboard(
     HWND hwnd,
     HDC hdc)
@@ -830,7 +1760,7 @@ drawText(
 POINT oldOrigin;
 drawText(
     hdc,
-    "v0.6",
+    "v0.7",
     55,
     660,
     RGB(100, 108, 122),
@@ -860,7 +1790,7 @@ if (currentPage != AppPage::Dashboard)
 
     case AppPage::Performance:
         pageTitle = "Performance";
-        pageSubtitle = "Detailed system performance monitoring";
+        pageSubtitle = "Real-time performance and resource usage.";
         break;
 
     case AppPage::SystemInfo:
@@ -895,15 +1825,17 @@ if (currentPage != AppPage::Dashboard)
         subtitleFont
     );
 
+ if (currentPage != AppPage::Performance)
+{
     drawRoundedBox(
         hdc,
         35,
         115,
         915,
-        610,
+        680,
         card
     );
-
+}
   if (currentPage == AppPage::Processes)
 {
     std::vector<ProcessInfo> processes =
@@ -1634,6 +2566,2946 @@ else
         smallFont
     );
 }
+else if (currentPage == AppPage::Performance)
+{
+    // --------------------------------------------------------
+    // PERFORMANCE PAGE
+    // Fixed layout: no page scrolling.
+    // The left resource cards stay visible, while the selected
+    // resource is shown in the large panel on the right.
+    // --------------------------------------------------------
+
+    const COLORREF performanceCard =
+        RGB(24, 27, 34);
+
+    const COLORREF performanceTrack =
+        RGB(45, 48, 58);
+
+    const COLORREF memoryPurple =
+        RGB(140, 80, 220);
+
+    const COLORREF diskGreen =
+        RGB(70, 200, 90);
+
+    const COLORREF gpuPurple =
+        RGB(155, 85, 220);
+
+    const COLORREF networkOrange =
+        RGB(220, 140, 55);
+
+
+    // --------------------------------------------------------
+    // COMMON CPU DATA
+    // --------------------------------------------------------
+
+    char cpuModel[256] = "Processor";
+
+    DWORD cpuModelSize =
+        sizeof(cpuModel);
+
+    RegGetValueA(
+        HKEY_LOCAL_MACHINE,
+        "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+        "ProcessorNameString",
+        RRF_RT_REG_SZ,
+        nullptr,
+        cpuModel,
+        &cpuModelSize
+    );
+
+    std::string cpuModelText =
+        cpuModel;
+
+    size_t cpuModelFirstCharacter =
+        cpuModelText.find_first_not_of(
+            " \t"
+        );
+
+    if (
+        cpuModelFirstCharacter !=
+        std::string::npos
+    )
+    {
+        cpuModelText.erase(
+            0,
+            cpuModelFirstCharacter
+        );
+    }
+
+
+    DWORD cpuMHz = 0;
+    DWORD cpuMHzSize =
+        sizeof(cpuMHz);
+
+    RegGetValueA(
+        HKEY_LOCAL_MACHINE,
+        "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+        "~MHz",
+        RRF_RT_REG_DWORD,
+        nullptr,
+        &cpuMHz,
+        &cpuMHzSize
+    );
+
+    std::ostringstream baseSpeedText;
+
+    if (cpuMHz > 0)
+    {
+        baseSpeedText
+            << std::fixed
+            << std::setprecision(2)
+            << (
+                cpuMHz /
+                1000.0
+            )
+            << " GHz";
+    }
+    else
+    {
+        baseSpeedText << "--";
+    }
+
+
+    std::vector<ProcessInfo> performanceProcesses =
+        getRunningProcesses();
+
+    unsigned long long performanceThreadCount = 0;
+    unsigned long long performanceHandleCount = 0;
+
+    for (
+        const ProcessInfo& process :
+        performanceProcesses
+    )
+    {
+        performanceThreadCount +=
+            process.threadCount;
+
+        performanceHandleCount +=
+            process.handleCount;
+    }
+
+
+    auto formatCount =
+        [](unsigned long long value)
+        -> std::string
+    {
+        std::string result =
+            std::to_string(value);
+
+        int insertPosition =
+            static_cast<int>(
+                result.length()
+            ) - 3;
+
+        while (insertPosition > 0)
+        {
+            result.insert(
+                static_cast<size_t>(
+                    insertPosition
+                ),
+                ","
+            );
+
+            insertPosition -= 3;
+        }
+
+        return result;
+    };
+
+
+    ULONGLONG cpuUpDays =
+        uptimeSeconds / 86400;
+
+    ULONGLONG cpuUpHours =
+        (
+            uptimeSeconds %
+            86400
+        ) / 3600;
+
+    ULONGLONG cpuUpMinutes =
+        (
+            uptimeSeconds %
+            3600
+        ) / 60;
+
+    ULONGLONG cpuUpSeconds =
+        uptimeSeconds % 60;
+
+    std::ostringstream cpuUpTimeText;
+
+    cpuUpTimeText
+        << cpuUpDays
+        << ":"
+        << std::setfill('0')
+        << std::setw(2)
+        << cpuUpHours
+        << ":"
+        << std::setw(2)
+        << cpuUpMinutes
+        << ":"
+        << std::setw(2)
+        << cpuUpSeconds;
+
+
+    auto countCpuRelationship =
+        [](LOGICAL_PROCESSOR_RELATIONSHIP relationship)
+        -> DWORD
+    {
+        DWORD bufferSize = 0;
+
+        GetLogicalProcessorInformationEx(
+            relationship,
+            nullptr,
+            &bufferSize
+        );
+
+        if (bufferSize == 0)
+        {
+            return 0;
+        }
+
+        std::vector<BYTE> buffer(
+            bufferSize
+        );
+
+        auto* info =
+            reinterpret_cast<
+                PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX
+            >(
+                buffer.data()
+            );
+
+        if (
+            !GetLogicalProcessorInformationEx(
+                relationship,
+                info,
+                &bufferSize
+            )
+        )
+        {
+            return 0;
+        }
+
+        DWORD count = 0;
+
+        BYTE* current =
+            buffer.data();
+
+        BYTE* end =
+            buffer.data() +
+            bufferSize;
+
+        while (current < end)
+        {
+            auto* currentInfo =
+                reinterpret_cast<
+                    PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX
+                >(
+                    current
+                );
+
+            count++;
+
+            current +=
+                currentInfo->Size;
+        }
+
+        return count;
+    };
+
+
+    DWORD socketCount =
+        countCpuRelationship(
+            RelationProcessorPackage
+        );
+
+    DWORD coreCount =
+        countCpuRelationship(
+            RelationProcessorCore
+        );
+
+    DWORD logicalProcessorCount =
+        GetActiveProcessorCount(
+            ALL_PROCESSOR_GROUPS
+        );
+
+    bool virtualizationEnabled =
+        IsProcessorFeaturePresent(
+            PF_VIRT_FIRMWARE_ENABLED
+        ) != FALSE;
+
+
+    unsigned long long l1CacheBytes = 0;
+    unsigned long long l2CacheBytes = 0;
+    unsigned long long l3CacheBytes = 0;
+
+    DWORD cacheBufferSize = 0;
+
+    GetLogicalProcessorInformationEx(
+        RelationCache,
+        nullptr,
+        &cacheBufferSize
+    );
+
+    if (cacheBufferSize > 0)
+    {
+        std::vector<BYTE> cacheBuffer(
+            cacheBufferSize
+        );
+
+        auto* cacheInfo =
+            reinterpret_cast<
+                PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX
+            >(
+                cacheBuffer.data()
+            );
+
+        if (
+            GetLogicalProcessorInformationEx(
+                RelationCache,
+                cacheInfo,
+                &cacheBufferSize
+            )
+        )
+        {
+            BYTE* current =
+                cacheBuffer.data();
+
+            BYTE* end =
+                cacheBuffer.data() +
+                cacheBufferSize;
+
+            while (current < end)
+            {
+                auto* currentInfo =
+                    reinterpret_cast<
+                        PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX
+                    >(
+                        current
+                    );
+
+                DWORD cacheSize =
+                    currentInfo->Cache.CacheSize;
+
+                BYTE cacheLevel =
+                    currentInfo->Cache.Level;
+
+                if (cacheLevel == 1)
+                {
+                    l1CacheBytes += cacheSize;
+                }
+                else if (cacheLevel == 2)
+                {
+                    l2CacheBytes += cacheSize;
+                }
+                else if (cacheLevel == 3)
+                {
+                    l3CacheBytes += cacheSize;
+                }
+
+                current +=
+                    currentInfo->Size;
+            }
+        }
+    }
+
+
+    auto formatCacheSize =
+        [](unsigned long long bytes)
+        -> std::string
+    {
+        if (bytes == 0)
+        {
+            return "--";
+        }
+
+        std::ostringstream stream;
+
+        if (
+            bytes >=
+            1024ULL * 1024ULL
+        )
+        {
+            stream
+                << std::fixed
+                << std::setprecision(1)
+                << (
+                    bytes /
+                    (
+                        1024.0 *
+                        1024.0
+                    )
+                )
+                << " MB";
+        }
+        else
+        {
+            stream
+                << (
+                    bytes /
+                    1024ULL
+                )
+                << " KB";
+        }
+
+        return stream.str();
+    };
+
+
+    std::string l1CacheText =
+        formatCacheSize(
+            l1CacheBytes
+        );
+
+    std::string l2CacheText =
+        formatCacheSize(
+            l2CacheBytes
+        );
+
+    std::string l3CacheText =
+        formatCacheSize(
+            l3CacheBytes
+        );
+
+
+    // --------------------------------------------------------
+    // LEFT RESOURCE CARDS
+    // Keep these coordinates compatible with Main.cpp clicks.
+    // --------------------------------------------------------
+
+    auto drawResourceCard =
+        [&](int top,
+            int bottom,
+            COLORREF accent,
+            bool selected)
+    {
+        if (selected)
+        {
+            drawRoundedBox(
+                hdc,
+                55,
+                top,
+                235,
+                bottom,
+                accent
+            );
+
+            drawRoundedBox(
+                hdc,
+                57,
+                top + 2,
+                233,
+                bottom - 2,
+                performanceCard
+            );
+        }
+        else
+        {
+            drawRoundedBox(
+                hdc,
+                55,
+                top,
+                235,
+                bottom,
+                performanceCard
+            );
+        }
+    };
+
+
+    // CPU
+    drawResourceCard(
+        135,
+        205,
+        RGB(66, 135, 245),
+        performanceView ==
+            PerformanceView::CPU
+    );
+
+    drawCpuGraph(
+        hdc,
+        65,
+        145,
+        58,
+        48
+    );
+
+    drawText(
+        hdc,
+        "CPU",
+        135,
+        145,
+        textPrimary,
+        labelFont
+    );
+
+    std::ostringstream cpuSideText;
+
+    cpuSideText
+        << std::fixed
+        << std::setprecision(0)
+        << cpuUsage
+        << "%";
+
+    drawText(
+        hdc,
+        cpuSideText.str(),
+        135,
+        172,
+        textSecondary,
+        smallFont
+    );
+
+
+    // Memory
+    drawResourceCard(
+        225,
+        295,
+        memoryPurple,
+        performanceView ==
+            PerformanceView::Memory
+    );
+
+    drawRamGraph(
+        hdc,
+        65,
+        235,
+        58,
+        48
+    );
+
+    drawText(
+        hdc,
+        "Memory",
+        135,
+        235,
+        textPrimary,
+        labelFont
+    );
+
+    std::ostringstream memorySideText;
+
+    memorySideText
+        << std::fixed
+        << std::setprecision(1)
+        << usedRamGB
+        << " / "
+        << totalRamGB
+        << " GB";
+
+    drawText(
+        hdc,
+        memorySideText.str(),
+        135,
+        262,
+        textSecondary,
+        smallFont
+    );
+
+
+    // Physical disks
+    int visibleDiskCards =
+        performanceVisibleDiskCardCount(
+            diskStats.size()
+        );
+
+    if (diskStats.empty())
+    {
+        int top =
+            performanceDiskCardTop(0);
+
+        drawResourceCard(
+            top,
+            top + performanceDiskCardHeight,
+            diskGreen,
+            performanceView ==
+                PerformanceView::Disk
+        );
+
+        drawRoundedBox(
+            hdc,
+            65,
+            top + 10,
+            123,
+            top + 58,
+            RGB(20, 24, 30)
+        );
+
+        drawGraphGrid(
+            hdc,
+            65,
+            top + 10,
+            58,
+            48
+        );
+
+        drawText(
+            hdc,
+            "Disk",
+            135,
+            top + 10,
+            textPrimary,
+            labelFont
+        );
+
+        drawText(
+            hdc,
+            "No disk data",
+            135,
+            top + 38,
+            textSecondary,
+            smallFont
+        );
+    }
+    else
+    {
+        int actualDiskCards =
+            (std::min)(
+                visibleDiskCards,
+                static_cast<int>(
+                    diskStats.size()
+                )
+            );
+
+        for (
+            int index = 0;
+            index < actualDiskCards;
+            index++
+        )
+        {
+            const DiskStats& disk =
+                diskStats[index];
+
+            int top =
+                performanceDiskCardTop(
+                    index
+                );
+
+            int bottom =
+                top +
+                performanceDiskCardHeight;
+
+            bool selected =
+                performanceView ==
+                    PerformanceView::Disk &&
+                selectedDiskIndex ==
+                    index;
+
+            drawResourceCard(
+                top,
+                bottom,
+                diskGreen,
+                selected
+            );
+
+            drawDiskHistoryGraph(
+                hdc,
+                65,
+                top + 10,
+                58,
+                48,
+                disk.activeHistory,
+                100.0,
+                diskGreen,
+                RGB(25, 55, 34)
+            );
+
+            drawText(
+                hdc,
+                disk.displayName,
+                135,
+                top + 8,
+                textPrimary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                disk.type,
+                135,
+                top + 31,
+                textSecondary,
+                smallFont
+            );
+
+            std::ostringstream diskSideText;
+
+            if (disk.performanceValid)
+            {
+                diskSideText
+                    << std::fixed
+                    << std::setprecision(0)
+                    << disk.activeTimePercent
+                    << "%";
+            }
+            else
+            {
+                diskSideText
+                    << "--";
+            }
+
+            drawText(
+                hdc,
+                diskSideText.str(),
+                135,
+                top + 49,
+                textSecondary,
+                smallFont
+            );
+        }
+    }
+
+
+    // GPU
+    int gpuTop =
+        performanceGpuCardTop(
+            diskStats.size()
+        );
+
+    drawResourceCard(
+        gpuTop,
+        gpuTop +
+            performanceDiskCardHeight,
+        gpuPurple,
+        performanceView ==
+            PerformanceView::GPU
+    );
+
+    drawRoundedBox(
+        hdc,
+        65,
+        gpuTop + 10,
+        123,
+        gpuTop + 58,
+        RGB(20, 24, 30)
+    );
+
+    drawGraphGrid(
+        hdc,
+        65,
+        gpuTop + 10,
+        58,
+        48
+    );
+
+    drawText(
+        hdc,
+        "--",
+        86,
+        gpuTop + 25,
+        gpuPurple,
+        labelFont
+    );
+
+    drawText(
+        hdc,
+        "GPU",
+        135,
+        gpuTop + 10,
+        textPrimary,
+        labelFont
+    );
+
+    drawText(
+        hdc,
+        "PLANNED",
+        135,
+        gpuTop + 37,
+        textSecondary,
+        smallFont
+    );
+
+
+    // Network
+    int networkTop =
+        performanceNetworkCardTop(
+            diskStats.size()
+        );
+
+    drawResourceCard(
+        networkTop,
+        networkTop +
+            performanceDiskCardHeight,
+        networkOrange,
+        performanceView ==
+            PerformanceView::Network
+    );
+
+    drawRoundedBox(
+        hdc,
+        65,
+        networkTop + 10,
+        123,
+        networkTop + 58,
+        RGB(20, 24, 30)
+    );
+
+    drawGraphGrid(
+        hdc,
+        65,
+        networkTop + 10,
+        58,
+        48
+    );
+
+    drawText(
+        hdc,
+        "--",
+        86,
+        networkTop + 25,
+        networkOrange,
+        labelFont
+    );
+
+    drawText(
+        hdc,
+        "Network",
+        135,
+        networkTop + 10,
+        textPrimary,
+        labelFont
+    );
+
+    drawText(
+        hdc,
+        "PLANNED",
+        135,
+        networkTop + 37,
+        textSecondary,
+        smallFont
+    );
+
+
+    // --------------------------------------------------------
+    // CPU VIEW
+    // --------------------------------------------------------
+
+    if (
+        performanceView ==
+        PerformanceView::CPU
+    )
+    {
+        // ----------------------------------------------------
+        // MAIN CPU CARD
+        // ----------------------------------------------------
+
+        drawRoundedBox(
+            hdc,
+            255,
+            115,
+            915,
+            430,
+            performanceCard
+        );
+
+
+        drawText(
+            hdc,
+            "CPU",
+            280,
+            130,
+            textPrimary,
+            titleFont
+        );
+
+
+        // CPU model, right aligned.
+        SIZE cpuModelExtent = {};
+
+        setFont(
+            hdc,
+            smallFont
+        );
+
+        GetTextExtentPoint32A(
+            hdc,
+            cpuModelText.c_str(),
+            static_cast<int>(
+                cpuModelText.length()
+            ),
+            &cpuModelExtent
+        );
+
+        int cpuModelX =
+            895 -
+            cpuModelExtent.cx;
+
+        if (cpuModelX < 545)
+        {
+            cpuModelX = 545;
+        }
+
+        drawText(
+            hdc,
+            cpuModelText,
+            cpuModelX,
+            136,
+            textSecondary,
+            smallFont
+        );
+
+
+        drawText(
+            hdc,
+            "% Utilization",
+            280,
+            158,
+            textSecondary,
+            smallFont
+        );
+
+
+        // Y-axis labels beside the graph.
+        drawText(
+            hdc,
+            "100%",
+            260,
+            176,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "50%",
+            266,
+            228,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "0%",
+            272,
+            280,
+            textSecondary,
+            smallFont
+        );
+
+
+        drawCpuGraph(
+            hdc,
+            300,
+            175,
+            590,
+            110
+        );
+
+        drawText(
+            hdc,
+            "60 seconds",
+            830,
+            289,
+            textSecondary,
+            smallFont
+        );
+
+
+        // ----------------------------------------------------
+        // CPU LEFT DETAILS
+        // ----------------------------------------------------
+
+        std::ostringstream utilizationText;
+
+        utilizationText
+            << std::fixed
+            << std::setprecision(0)
+            << cpuUsage
+            << "%";
+
+
+        drawText(
+            hdc,
+            "Utilization",
+            280,
+            310,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            utilizationText.str(),
+            280,
+            328,
+            textPrimary,
+            labelFont
+        );
+
+
+        drawText(
+            hdc,
+            "Speed",
+            390,
+            310,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            baseSpeedText.str(),
+            390,
+            328,
+            textPrimary,
+            labelFont
+        );
+
+
+        drawText(
+            hdc,
+            "Processes",
+            280,
+            353,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            formatCount(
+                performanceProcesses.size()
+            ),
+            280,
+            371,
+            textPrimary,
+            labelFont
+        );
+
+
+        drawText(
+            hdc,
+            "Threads",
+            390,
+            353,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            formatCount(
+                performanceThreadCount
+            ),
+            390,
+            371,
+            textPrimary,
+            labelFont
+        );
+
+
+        drawText(
+            hdc,
+            "Handles",
+            500,
+            353,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            formatCount(
+                performanceHandleCount
+            ),
+            500,
+            371,
+            textPrimary,
+            labelFont
+        );
+
+
+        drawText(
+            hdc,
+            "Up time",
+            280,
+            397,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            cpuUpTimeText.str(),
+            280,
+            413,
+            textPrimary,
+            smallFont
+        );
+
+
+        // ----------------------------------------------------
+        // CPU RIGHT DETAILS
+        // ----------------------------------------------------
+
+        const int cpuDetailLabelX = 600;
+        const int cpuDetailValueX = 765;
+        const int cpuDetailStartY = 310;
+        const int cpuDetailSpacing = 15;
+
+
+        drawText(
+            hdc,
+            "Base speed:",
+            cpuDetailLabelX,
+            cpuDetailStartY,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            baseSpeedText.str(),
+            cpuDetailValueX,
+            cpuDetailStartY,
+            textPrimary,
+            smallFont
+        );
+
+
+        drawText(
+            hdc,
+            "Sockets:",
+            cpuDetailLabelX,
+            cpuDetailStartY +
+                cpuDetailSpacing,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            std::to_string(
+                socketCount
+            ),
+            cpuDetailValueX,
+            cpuDetailStartY +
+                cpuDetailSpacing,
+            textPrimary,
+            smallFont
+        );
+
+
+        drawText(
+            hdc,
+            "Cores:",
+            cpuDetailLabelX,
+            cpuDetailStartY +
+                cpuDetailSpacing * 2,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            std::to_string(
+                coreCount
+            ),
+            cpuDetailValueX,
+            cpuDetailStartY +
+                cpuDetailSpacing * 2,
+            textPrimary,
+            smallFont
+        );
+
+
+        drawText(
+            hdc,
+            "Logical processors:",
+            cpuDetailLabelX,
+            cpuDetailStartY +
+                cpuDetailSpacing * 3,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            std::to_string(
+                logicalProcessorCount
+            ),
+            cpuDetailValueX,
+            cpuDetailStartY +
+                cpuDetailSpacing * 3,
+            textPrimary,
+            smallFont
+        );
+
+
+        drawText(
+            hdc,
+            "Virtualization:",
+            cpuDetailLabelX,
+            cpuDetailStartY +
+                cpuDetailSpacing * 4,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            virtualizationEnabled
+                ? "Enabled"
+                : "Disabled",
+            cpuDetailValueX,
+            cpuDetailStartY +
+                cpuDetailSpacing * 4,
+            textPrimary,
+            smallFont
+        );
+
+
+        drawText(
+            hdc,
+            "L1 cache:",
+            cpuDetailLabelX,
+            cpuDetailStartY +
+                cpuDetailSpacing * 5,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            l1CacheText,
+            cpuDetailValueX,
+            cpuDetailStartY +
+                cpuDetailSpacing * 5,
+            textPrimary,
+            smallFont
+        );
+
+
+        drawText(
+            hdc,
+            "L2 cache:",
+            cpuDetailLabelX,
+            cpuDetailStartY +
+                cpuDetailSpacing * 6,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            l2CacheText,
+            cpuDetailValueX,
+            cpuDetailStartY +
+                cpuDetailSpacing * 6,
+            textPrimary,
+            smallFont
+        );
+
+
+        drawText(
+            hdc,
+            "L3 cache:",
+            cpuDetailLabelX,
+            cpuDetailStartY +
+                cpuDetailSpacing * 7,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            l3CacheText,
+            cpuDetailValueX,
+            cpuDetailStartY +
+                cpuDetailSpacing * 7,
+            textPrimary,
+            smallFont
+        );
+
+
+        // ----------------------------------------------------
+        // MEMORY SUMMARY CARD
+        // ----------------------------------------------------
+
+        const int summaryTop = 440;
+        const int summaryBottom = 680;
+
+        const int memoryLeft = 255;
+        const int memoryRight = 465;
+
+        drawRoundedBox(
+            hdc,
+            memoryLeft,
+            summaryTop,
+            memoryRight,
+            summaryBottom,
+            performanceCard
+        );
+
+        drawText(
+            hdc,
+            "Memory",
+            270,
+            455,
+            textPrimary,
+            labelFont
+        );
+
+        std::ostringstream memoryTotalTopText;
+
+        memoryTotalTopText
+            << std::fixed
+            << std::setprecision(1)
+            << totalRamGB
+            << " GB";
+
+        SIZE memoryTotalExtent = {};
+
+        setFont(
+            hdc,
+            smallFont
+        );
+
+        GetTextExtentPoint32A(
+            hdc,
+            memoryTotalTopText.str().c_str(),
+            static_cast<int>(
+                memoryTotalTopText.str().length()
+            ),
+            &memoryTotalExtent
+        );
+
+        drawText(
+            hdc,
+            memoryTotalTopText.str(),
+            memoryRight -
+                15 -
+                memoryTotalExtent.cx,
+            457,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Memory usage",
+            270,
+            480,
+            textSecondary,
+            smallFont
+        );
+
+        drawRamGraph(
+            hdc,
+            270,
+            497,
+            180,
+            55
+        );
+
+        drawText(
+            hdc,
+            "60 seconds",
+            390,
+            555,
+            textSecondary,
+            smallFont
+        );
+
+        drawRoundedBox(
+            hdc,
+            270,
+            570,
+            450,
+            580,
+            performanceTrack
+        );
+
+        int memoryFillWidth =
+            static_cast<int>(
+                180.0 *
+                (
+                    ramPercent /
+                    100.0
+                )
+            );
+
+        memoryFillWidth =
+            std::clamp(
+                memoryFillWidth,
+                0,
+                180
+            );
+
+        if (memoryFillWidth > 0)
+        {
+            drawRoundedBox(
+                hdc,
+                270,
+                570,
+                270 + memoryFillWidth,
+                580,
+                memoryPurple
+            );
+        }
+
+        std::ostringstream memoryMainText;
+
+        memoryMainText
+            << std::fixed
+            << std::setprecision(1)
+            << usedRamGB
+            << " GB ("
+            << std::setprecision(0)
+            << ramPercent
+            << "%)";
+
+        drawText(
+            hdc,
+            memoryMainText.str(),
+            270,
+            590,
+            textPrimary,
+            labelFont
+        );
+
+        double availableRamGB =
+            totalRamGB -
+            usedRamGB;
+
+        drawText(
+            hdc,
+            "In use",
+            270,
+            620,
+            textSecondary,
+            smallFont
+        );
+
+        std::ostringstream memoryUsedText;
+
+        memoryUsedText
+            << std::fixed
+            << std::setprecision(1)
+            << usedRamGB
+            << " GB";
+
+        drawText(
+            hdc,
+            memoryUsedText.str(),
+            270,
+            637,
+            textPrimary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Available",
+            365,
+            620,
+            textSecondary,
+            smallFont
+        );
+
+        std::ostringstream memoryAvailableText;
+
+        memoryAvailableText
+            << std::fixed
+            << std::setprecision(1)
+            << availableRamGB
+            << " GB";
+
+        drawText(
+            hdc,
+            memoryAvailableText.str(),
+            365,
+            637,
+            textPrimary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Total",
+            270,
+            648,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            memoryTotalTopText.str(),
+            270,
+            665,
+            textPrimary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Usage",
+            365,
+            648,
+            textSecondary,
+            smallFont
+        );
+
+        std::ostringstream memoryUsageBottomText;
+
+        memoryUsageBottomText
+            << std::fixed
+            << std::setprecision(0)
+            << ramPercent
+            << "%";
+
+        drawText(
+            hdc,
+            memoryUsageBottomText.str(),
+            365,
+            665,
+            textPrimary,
+            smallFont
+        );
+
+
+        // ----------------------------------------------------
+        // DISK SUMMARY CARD
+        // Graph is styled like the CPU graph, but it shows the
+        // current STORAGE USED percentage because active-time
+        // history is not collected by the current backend.
+        // ----------------------------------------------------
+
+        const int diskLeft = 475;
+        const int diskRight = 685;
+
+        drawRoundedBox(
+            hdc,
+            diskLeft,
+            summaryTop,
+            diskRight,
+            summaryBottom,
+            performanceCard
+        );
+
+        drawText(
+            hdc,
+            "Disk 0 (C:)",
+            490,
+            455,
+            textPrimary,
+            labelFont
+        );
+
+        std::ostringstream diskCapacityTopText;
+
+        diskCapacityTopText
+            << std::fixed
+            << std::setprecision(0)
+            << totalDiskGB
+            << " GB";
+
+        SIZE diskCapacityExtent = {};
+
+        setFont(
+            hdc,
+            smallFont
+        );
+
+        GetTextExtentPoint32A(
+            hdc,
+            diskCapacityTopText.str().c_str(),
+            static_cast<int>(
+                diskCapacityTopText.str().length()
+            ),
+            &diskCapacityExtent
+        );
+
+        drawText(
+            hdc,
+            diskCapacityTopText.str(),
+            diskRight -
+                15 -
+                diskCapacityExtent.cx,
+            457,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Storage used",
+            490,
+            480,
+            textSecondary,
+            smallFont
+        );
+
+        drawCurrentPercentGraph(
+            hdc,
+            490,
+            497,
+            180,
+            55,
+            diskPercent,
+            diskGreen,
+            RGB(25, 55, 34)
+        );
+
+        drawText(
+            hdc,
+            "Current",
+            625,
+            555,
+            textSecondary,
+            smallFont
+        );
+
+        std::ostringstream diskPercentText;
+
+        diskPercentText
+            << diskPercent
+            << "%";
+
+        drawText(
+            hdc,
+            diskPercentText.str(),
+            490,
+            575,
+            textPrimary,
+            labelFont
+        );
+
+        double freeDiskGB =
+            totalDiskGB -
+            usedDiskGB;
+
+        drawText(
+            hdc,
+            "Used",
+            490,
+            610,
+            textSecondary,
+            smallFont
+        );
+
+        std::ostringstream diskUsedText;
+
+        diskUsedText
+            << std::fixed
+            << std::setprecision(1)
+            << usedDiskGB
+            << " GB";
+
+        drawText(
+            hdc,
+            diskUsedText.str(),
+            490,
+            627,
+            textPrimary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Free",
+            590,
+            610,
+            textSecondary,
+            smallFont
+        );
+
+        std::ostringstream diskFreeText;
+
+        diskFreeText
+            << std::fixed
+            << std::setprecision(1)
+            << freeDiskGB
+            << " GB";
+
+        drawText(
+            hdc,
+            diskFreeText.str(),
+            590,
+            627,
+            textPrimary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Capacity",
+            490,
+            648,
+            textSecondary,
+            smallFont
+        );
+
+        std::ostringstream diskTotalText;
+
+        diskTotalText
+            << std::fixed
+            << std::setprecision(1)
+            << totalDiskGB
+            << " GB";
+
+        drawText(
+            hdc,
+            diskTotalText.str(),
+            490,
+            665,
+            textPrimary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Drive",
+            590,
+            648,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "C:\\",
+            590,
+            665,
+            textPrimary,
+            smallFont
+        );
+
+
+        // ----------------------------------------------------
+        // GPU SUMMARY CARD
+        // ----------------------------------------------------
+
+        const int gpuLeft = 695;
+        const int gpuRight = 915;
+
+        drawRoundedBox(
+            hdc,
+            gpuLeft,
+            summaryTop,
+            gpuRight,
+            summaryBottom,
+            performanceCard
+        );
+
+        drawText(
+            hdc,
+            "GPU",
+            710,
+            455,
+            textPrimary,
+            labelFont
+        );
+
+        drawText(
+            hdc,
+            "PLANNED",
+            845,
+            457,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "3D Utilization",
+            710,
+            480,
+            textSecondary,
+            smallFont
+        );
+
+        drawRoundedBox(
+            hdc,
+            710,
+            497,
+            900,
+            552,
+            RGB(20, 24, 30)
+        );
+
+        drawGraphGrid(
+            hdc,
+            710,
+            497,
+            190,
+            55
+        );
+
+        drawText(
+            hdc,
+            "--",
+            795,
+            515,
+            gpuPurple,
+            labelFont
+        );
+
+        drawText(
+            hdc,
+            "--",
+            710,
+            575,
+            textPrimary,
+            labelFont
+        );
+
+        drawText(
+            hdc,
+            "Dedicated GPU memory",
+            710,
+            610,
+            textSecondary,
+            smallFont
+        );
+
+        drawRoundedBox(
+            hdc,
+            710,
+            628,
+            805,
+            638,
+            performanceTrack
+        );
+
+        drawText(
+            hdc,
+            "--",
+            815,
+            626,
+            textPrimary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Shared GPU memory",
+            710,
+            648,
+            textSecondary,
+            smallFont
+        );
+
+        drawRoundedBox(
+            hdc,
+            710,
+            664,
+            805,
+            674,
+            performanceTrack
+        );
+
+        drawText(
+            hdc,
+            "--",
+            815,
+            662,
+            textPrimary,
+            smallFont
+        );
+    }
+
+
+    // --------------------------------------------------------
+    // MEMORY VIEW
+    // --------------------------------------------------------
+    else if (
+        performanceView ==
+        PerformanceView::Memory
+    )
+    {
+        drawRoundedBox(
+            hdc,
+            255,
+            135,
+            890,
+            680,
+            performanceCard
+        );
+
+        const MemoryPerformanceDetails
+            memoryPerformance =
+                getMemoryPerformanceDetails();
+
+        const MemoryHardwareDetails&
+            memoryHardware =
+                getMemoryHardwareDetails();
+
+        double availableRamGB =
+            totalRamGB - usedRamGB;
+
+        double usedPercent =
+            totalRamGB > 0.0
+                ? (
+                    usedRamGB /
+                    totalRamGB
+                  ) * 100.0
+                : 0.0;
+
+        // ----------------------------------------------------
+        // TOP
+        // ----------------------------------------------------
+
+        drawText(
+            hdc,
+            "Memory",
+            280,
+            155,
+            textPrimary,
+            titleFont
+        );
+
+        std::ostringstream memoryTotalTop;
+
+        memoryTotalTop
+            << std::fixed
+            << std::setprecision(1)
+            << totalRamGB
+            << " GB";
+
+        drawText(
+            hdc,
+            memoryTotalTop.str(),
+            820,
+            155,
+            textPrimary,
+            labelFont
+        );
+
+        drawText(
+            hdc,
+            "Memory usage",
+            280,
+            195,
+            textSecondary,
+            smallFont
+        );
+
+        // ----------------------------------------------------
+        // LARGE MEMORY GRAPH
+        // ----------------------------------------------------
+
+        drawRamGraph(
+            hdc,
+            300,
+            225,
+            565,
+            205
+        );
+
+        std::ostringstream memoryGraphTop;
+        memoryGraphTop
+            << std::fixed
+            << std::setprecision(1)
+            << totalRamGB
+            << " GB";
+
+        drawText(
+            hdc,
+            memoryGraphTop.str(),
+            255,
+            220,
+            textSecondary,
+            smallFont
+        );
+
+        std::ostringstream memoryGraph75;
+        memoryGraph75
+            << std::fixed
+            << std::setprecision(1)
+            << (totalRamGB * 0.75)
+            << " GB";
+
+        drawText(
+            hdc,
+            memoryGraph75.str(),
+            255,
+            270,
+            textSecondary,
+            smallFont
+        );
+
+        std::ostringstream memoryGraph50;
+        memoryGraph50
+            << std::fixed
+            << std::setprecision(1)
+            << (totalRamGB * 0.50)
+            << " GB";
+
+        drawText(
+            hdc,
+            memoryGraph50.str(),
+            255,
+            320,
+            textSecondary,
+            smallFont
+        );
+
+        std::ostringstream memoryGraph25;
+        memoryGraph25
+            << std::fixed
+            << std::setprecision(1)
+            << (totalRamGB * 0.25)
+            << " GB";
+
+        drawText(
+            hdc,
+            memoryGraph25.str(),
+            255,
+            370,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "0 GB",
+            265,
+            416,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "60 seconds",
+            300,
+            437,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "0",
+            858,
+            437,
+            textSecondary,
+            smallFont
+        );
+
+        // ----------------------------------------------------
+        // MEMORY COMPOSITION
+        // ----------------------------------------------------
+
+        drawText(
+            hdc,
+            "Memory composition",
+            280,
+            470,
+            textSecondary,
+            smallFont
+        );
+
+        drawRoundedBox(
+            hdc,
+            280,
+            495,
+            865,
+            530,
+            RGB(32, 36, 44)
+        );
+
+        int compositionWidth =
+            static_cast<int>(
+                585.0 *
+                (usedPercent / 100.0)
+            );
+
+        if (compositionWidth < 0)
+            compositionWidth = 0;
+
+        if (compositionWidth > 585)
+            compositionWidth = 585;
+
+        HBRUSH compositionBrush =
+            CreateSolidBrush(
+                RGB(140, 80, 220)
+            );
+
+        RECT usedRect =
+        {
+            282,
+            497,
+            282 + compositionWidth,
+            528
+        };
+
+        FillRect(
+            hdc,
+            &usedRect,
+            compositionBrush
+        );
+
+        DeleteObject(
+            compositionBrush
+        );
+
+        HPEN dividerPen =
+            CreatePen(
+                PS_SOLID,
+                1,
+                RGB(80, 84, 96)
+            );
+
+        HGDIOBJ oldDividerPen =
+            SelectObject(
+                hdc,
+                dividerPen
+            );
+
+        MoveToEx(
+            hdc,
+            282 + compositionWidth,
+            497,
+            nullptr
+        );
+
+        LineTo(
+            hdc,
+            282 + compositionWidth,
+            528
+        );
+
+        SelectObject(
+            hdc,
+            oldDividerPen
+        );
+
+        DeleteObject(
+            dividerPen
+        );
+
+        // ----------------------------------------------------
+        // TEXT VALUES
+        // ----------------------------------------------------
+
+        std::ostringstream memoryInUseText;
+        memoryInUseText
+            << std::fixed
+            << std::setprecision(1)
+            << usedRamGB
+            << " GB";
+
+        std::ostringstream memoryAvailableText;
+        memoryAvailableText
+            << std::fixed
+            << std::setprecision(1)
+            << availableRamGB
+            << " GB";
+
+        std::string memoryCommittedText =
+            "--";
+
+        std::string memoryCachedText =
+            "--";
+
+        std::string pagedPoolText =
+            "--";
+
+        std::string nonPagedPoolText =
+            "--";
+
+        if (memoryPerformance.valid)
+        {
+            memoryCommittedText =
+                formatMemoryGigabyteNumber(
+                    memoryPerformance.
+                        commitTotalBytes
+                ) +
+                " / " +
+                formatMemoryGigabyteNumber(
+                    memoryPerformance.
+                        commitLimitBytes
+                ) +
+                " GB";
+
+            memoryCachedText =
+                formatMemoryBytes(
+                    memoryPerformance.
+                        cachedBytes
+                );
+
+            pagedPoolText =
+                formatMemoryBytes(
+                    memoryPerformance.
+                        pagedPoolBytes
+                );
+
+            nonPagedPoolText =
+                formatMemoryBytes(
+                    memoryPerformance.
+                        nonPagedPoolBytes
+                );
+        }
+
+        std::string memorySpeedText =
+            "--";
+
+        if (memoryHardware.speedMTs > 0)
+        {
+            memorySpeedText =
+                std::to_string(
+                    memoryHardware.speedMTs
+                ) +
+                " MT/s";
+        }
+
+        std::string memorySlotsText =
+            "--";
+
+        if (memoryHardware.totalSlots > 0)
+        {
+            memorySlotsText =
+                std::to_string(
+                    memoryHardware.usedSlots
+                ) +
+                " of " +
+                std::to_string(
+                    memoryHardware.totalSlots
+                );
+        }
+
+        std::string hardwareReservedText =
+            "--";
+
+        if (memoryHardware.
+                hardwareReservedValid)
+        {
+            hardwareReservedText =
+                formatMemoryBytes(
+                    memoryHardware.
+                        hardwareReservedBytes
+                );
+        }
+
+        // ----------------------------------------------------
+        // MEMORY DETAILS - LEFT
+        // ----------------------------------------------------
+
+        drawText(
+            hdc,
+            "In use (Compressed)",
+            280,
+            550,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            memoryInUseText.str(),
+            280,
+            570,
+            textPrimary,
+            labelFont
+        );
+
+        drawText(
+            hdc,
+            "Available",
+            440,
+            550,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            memoryAvailableText.str(),
+            440,
+            570,
+            textPrimary,
+            labelFont
+        );
+
+        drawText(
+            hdc,
+            "Committed",
+            280,
+            595,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            memoryCommittedText,
+            280,
+            613,
+            textPrimary,
+            labelFont
+        );
+
+        drawText(
+            hdc,
+            "Cached",
+            440,
+            595,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            memoryCachedText,
+            440,
+            613,
+            textPrimary,
+            labelFont
+        );
+
+        drawText(
+            hdc,
+            "Paged pool",
+            280,
+            642,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            pagedPoolText,
+            280,
+            660,
+            textPrimary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Non-paged pool",
+            440,
+            642,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            nonPagedPoolText,
+            440,
+            660,
+            textPrimary,
+            smallFont
+        );
+
+        // ----------------------------------------------------
+        // MEMORY HARDWARE DETAILS - RIGHT
+        // ----------------------------------------------------
+
+        const int memoryDetailLabelX = 620;
+        const int memoryDetailValueX = 790;
+
+        drawText(
+            hdc,
+            "Speed:",
+            memoryDetailLabelX,
+            550,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            memorySpeedText,
+            memoryDetailValueX,
+            550,
+            textPrimary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Slots used:",
+            memoryDetailLabelX,
+            575,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            memorySlotsText,
+            memoryDetailValueX,
+            575,
+            textPrimary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Form factor:",
+            memoryDetailLabelX,
+            600,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            memoryHardware.formFactor,
+            memoryDetailValueX,
+            600,
+            textPrimary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Hardware reserved:",
+            memoryDetailLabelX,
+            625,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            hardwareReservedText,
+            memoryDetailValueX,
+            625,
+            textPrimary,
+            smallFont
+        );
+    }
+
+    // --------------------------------------------------------
+    // DISK VIEW
+    // --------------------------------------------------------
+    else if (
+        performanceView ==
+        PerformanceView::Disk
+    )
+    {
+        drawRoundedBox(
+            hdc,
+            255,
+            115,
+            915,
+            680,
+            performanceCard
+        );
+
+        if (diskStats.empty())
+        {
+            drawText(
+                hdc,
+                "Disk",
+                280,
+                135,
+                textPrimary,
+                titleFont
+            );
+
+            drawText(
+                hdc,
+                "No physical disk information is currently available.",
+                280,
+                195,
+                textSecondary,
+                labelFont
+            );
+        }
+        else
+        {
+            int diskIndex =
+                selectedDiskIndex;
+
+            if (
+                diskIndex < 0 ||
+                diskIndex >=
+                    static_cast<int>(
+                        diskStats.size()
+                    )
+            )
+            {
+                diskIndex = 0;
+            }
+
+            const DiskStats& disk =
+                diskStats[diskIndex];
+
+            drawText(
+                hdc,
+                disk.displayName,
+                280,
+                130,
+                textPrimary,
+                titleFont
+            );
+
+            SIZE modelExtent = {};
+
+            setFont(
+                hdc,
+                smallFont
+            );
+
+            GetTextExtentPoint32A(
+                hdc,
+                disk.model.c_str(),
+                static_cast<int>(
+                    disk.model.length()
+                ),
+                &modelExtent
+            );
+
+            int modelX =
+                895 -
+                modelExtent.cx;
+
+            if (modelX < 565)
+            {
+                modelX = 565;
+            }
+
+            drawText(
+                hdc,
+                disk.model,
+                modelX,
+                138,
+                textSecondary,
+                smallFont
+            );
+
+
+            // ------------------------------------------------
+            // ACTIVE TIME GRAPH
+            // ------------------------------------------------
+
+            drawText(
+                hdc,
+                "Active time",
+                280,
+                168,
+                textSecondary,
+                smallFont
+            );
+
+            drawDiskHistoryGraph(
+                hdc,
+                300,
+                188,
+                565,
+                125,
+                disk.activeHistory,
+                100.0,
+                diskGreen,
+                RGB(25, 55, 34)
+            );
+
+            drawText(
+                hdc,
+                "100%",
+                865,
+                181,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "0%",
+                875,
+                302,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "60 seconds",
+                300,
+                316,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "0",
+                858,
+                316,
+                textSecondary,
+                smallFont
+            );
+
+
+            // ------------------------------------------------
+            // DISK TRANSFER RATE GRAPH
+            // ------------------------------------------------
+
+            const COLORREF transferColor =
+                RGB(35, 210, 180);
+
+            const COLORREF transferFill =
+                RGB(18, 62, 58);
+
+            double transferScale =
+                getDiskTransferGraphScale(
+                    disk
+                );
+
+            drawText(
+                hdc,
+                "Disk transfer rate",
+                280,
+                340,
+                textSecondary,
+                smallFont
+            );
+
+            drawDiskHistoryGraph(
+                hdc,
+                300,
+                360,
+                565,
+                92,
+                disk.transferHistory,
+                transferScale,
+                transferColor,
+                transferFill
+            );
+
+            std::ostringstream transferTopText;
+            transferTopText
+                << std::fixed
+                << std::setprecision(
+                    transferScale < 10.0
+                    ? 1
+                    : 0
+                )
+                << transferScale
+                << " MB/s";
+
+            std::ostringstream transferHalfText;
+            transferHalfText
+                << std::fixed
+                << std::setprecision(
+                    transferScale < 10.0
+                    ? 1
+                    : 0
+                )
+                << (transferScale / 2.0)
+                << " MB/s";
+
+            drawText(
+                hdc,
+                transferTopText.str(),
+                820,
+                347,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                transferHalfText.str(),
+                820,
+                392,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "60 seconds",
+                300,
+                455,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "0",
+                858,
+                455,
+                textSecondary,
+                smallFont
+            );
+
+
+            // ------------------------------------------------
+            // LIVE VALUES - LEFT
+            // ------------------------------------------------
+
+            std::string activeText = "--";
+            std::string responseText = "--";
+            std::string readText = "--";
+            std::string writeText = "--";
+
+            if (disk.performanceValid)
+            {
+                std::ostringstream activeStream;
+                activeStream
+                    << std::fixed
+                    << std::setprecision(0)
+                    << disk.activeTimePercent
+                    << "%";
+                activeText =
+                    activeStream.str();
+
+                std::ostringstream responseStream;
+                responseStream
+                    << std::fixed
+                    << std::setprecision(1)
+                    << disk.averageResponseMs
+                    << " ms";
+                responseText =
+                    responseStream.str();
+
+                readText =
+                    formatDiskSpeed(
+                        disk.readMBps
+                    );
+
+                writeText =
+                    formatDiskSpeed(
+                        disk.writeMBps
+                    );
+            }
+
+            drawText(
+                hdc,
+                "Active time",
+                280,
+                480,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                activeText,
+                280,
+                500,
+                textPrimary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "Average response time",
+                410,
+                480,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                responseText,
+                410,
+                500,
+                textPrimary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "Read speed",
+                280,
+                540,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                readText,
+                280,
+                560,
+                textPrimary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "Write speed",
+                410,
+                540,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                writeText,
+                410,
+                560,
+                textPrimary,
+                labelFont
+            );
+
+
+            // ------------------------------------------------
+            // DISK DETAILS - RIGHT
+            // ------------------------------------------------
+
+            const int diskDetailLabelX = 610;
+            const int diskDetailValueX = 760;
+            const int diskDetailStartY = 480;
+            const int diskDetailSpacing = 28;
+
+            std::string capacityText =
+                formatDiskCapacity(
+                    disk.capacityGB
+                );
+
+            std::string formattedText =
+                formatDiskCapacity(
+                    disk.formattedGB
+                );
+
+            drawText(
+                hdc,
+                "Capacity:",
+                diskDetailLabelX,
+                diskDetailStartY,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                capacityText,
+                diskDetailValueX,
+                diskDetailStartY,
+                textPrimary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "Formatted:",
+                diskDetailLabelX,
+                diskDetailStartY +
+                    diskDetailSpacing,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                formattedText,
+                diskDetailValueX,
+                diskDetailStartY +
+                    diskDetailSpacing,
+                textPrimary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "System disk:",
+                diskDetailLabelX,
+                diskDetailStartY +
+                    diskDetailSpacing * 2,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                disk.systemDisk
+                    ? "Yes"
+                    : "No",
+                diskDetailValueX,
+                diskDetailStartY +
+                    diskDetailSpacing * 2,
+                textPrimary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "Page file:",
+                diskDetailLabelX,
+                diskDetailStartY +
+                    diskDetailSpacing * 3,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                disk.pageFile
+                    ? "Yes"
+                    : "No",
+                diskDetailValueX,
+                diskDetailStartY +
+                    diskDetailSpacing * 3,
+                textPrimary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "Type:",
+                diskDetailLabelX,
+                diskDetailStartY +
+                    diskDetailSpacing * 4,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                disk.type,
+                diskDetailValueX,
+                diskDetailStartY +
+                    diskDetailSpacing * 4,
+                textPrimary,
+                smallFont
+            );
+        }
+    }
+
+
+    // --------------------------------------------------------
+    // GPU / NETWORK PLACEHOLDER VIEWS
+    // --------------------------------------------------------
+    else
+    {
+        drawRoundedBox(
+            hdc,
+            255,
+            135,
+            890,
+            550,
+            performanceCard
+        );
+
+        std::string plannedTitle =
+            performanceView ==
+                PerformanceView::GPU
+            ? "GPU"
+            : "NETWORK";
+
+        drawText(
+            hdc,
+            plannedTitle,
+            280,
+            155,
+            textPrimary,
+            titleFont
+        );
+
+        drawText(
+            hdc,
+            "Monitoring support is planned for a later version.",
+            280,
+            215,
+            textSecondary,
+            labelFont
+        );
+    }
+}
 else
 {
     drawText(
@@ -1654,14 +5526,15 @@ else
         smallFont
     );
 }
-    SetViewportOrgEx(
-        hdc,
-        oldOrigin.x,
-        oldOrigin.y,
-        nullptr
-    );
 
-    return;
+SetViewportOrgEx(
+    hdc,
+    oldOrigin.x,
+    oldOrigin.y,
+    nullptr
+);
+
+return;
 }
     // --------------------------------------------------------
     // Header
