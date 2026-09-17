@@ -2741,10 +2741,33 @@ else if (currentPage == AppPage::SystemInfo)
         );
 
     int shownDeviceCount =
-        (std::min)(
-            deviceCount,
-            16
-        );
+        deviceCount;
+
+    const ConnectedDeviceInfo*
+        selectedConnectedDevice =
+            nullptr;
+
+    if (!selectedConnectedDeviceKey.empty())
+    {
+        for (const ConnectedDeviceInfo& device :
+             systemInfo.connectedDevices)
+        {
+            if (
+                device.selectionKey ==
+                selectedConnectedDeviceKey
+            )
+            {
+                selectedConnectedDevice =
+                    &device;
+                break;
+            }
+        }
+
+        if (selectedConnectedDevice == nullptr)
+        {
+            selectedConnectedDeviceKey.clear();
+        }
+    }
 
     int deviceRows =
         (shownDeviceCount + 1) / 2;
@@ -2756,18 +2779,26 @@ else if (currentPage == AppPage::SystemInfo)
 
     const int devicesTop = 945;
     const int deviceCardHeight =
-        78 +
-        deviceRows * 38 +
-        (deviceCount > shownDeviceCount
-            ? 24
-            : 0);
+        90 +
+        deviceRows * 38;
 
     const int devicesBottom =
         devicesTop +
         deviceCardHeight;
 
-    const int aboutTop =
+    const int deviceDetailsTop =
         devicesBottom + 15;
+
+    const int deviceDetailsBottom =
+        deviceDetailsTop +
+        (
+            selectedConnectedDevice != nullptr
+            ? 315
+            : 110
+        );
+
+    const int aboutTop =
+        deviceDetailsBottom + 15;
 
     const int aboutBottom =
         aboutTop + 95;
@@ -3391,7 +3422,7 @@ else if (currentPage == AppPage::SystemInfo)
 
     drawText(
         hdc,
-        "Currently present USB, Bluetooth, HID, display and user-facing devices.",
+        "Currently present USB, Bluetooth, HID, display and user-facing devices. Click a device for details.",
         leftX + 72,
         devicesTop + 45,
         textSecondary,
@@ -3441,14 +3472,32 @@ else if (currentPage == AppPage::SystemInfo)
                     index
                 ];
 
+            bool selected =
+                !selectedConnectedDeviceKey.empty() &&
+                device.selectionKey ==
+                    selectedConnectedDeviceKey;
+
+            drawRoundedBox(
+                hdc,
+                itemLeft - 6,
+                itemY - 7,
+                itemLeft + itemWidth,
+                itemY + 24,
+                selected
+                    ? RGB(37, 54, 73)
+                    : RGB(28, 31, 39)
+            );
+
             drawText(
                 hdc,
                 "[" +
-                    device.type +
+                    device.connectionType +
                     "]",
                 itemLeft,
                 itemY,
-                infoAccent,
+                selected
+                    ? RGB(105, 170, 250)
+                    : infoAccent,
                 smallFont
             );
 
@@ -3456,32 +3505,154 @@ else if (currentPage == AppPage::SystemInfo)
                 hdc,
                 fitInfoText(
                     device.name,
-                    itemWidth - 105,
+                    itemWidth - 125,
                     smallFont
                 ),
-                itemLeft + 95,
+                itemLeft + 115,
                 itemY,
                 textPrimary,
                 smallFont
             );
         }
+    }
 
-        if (deviceCount > shownDeviceCount)
+
+    // ----------------------------------------------------
+    // SELECTED DEVICE DETAILS
+    // ----------------------------------------------------
+    drawInfoCard(
+        leftX,
+        deviceDetailsTop,
+        rightRight,
+        deviceDetailsBottom,
+        "DET",
+        "Device Details",
+        infoCyan
+    );
+
+    if (selectedConnectedDevice == nullptr)
+    {
+        drawText(
+            hdc,
+            "Select any connected device above to view its hardware and connection details.",
+            leftX + 20,
+            deviceDetailsTop + 68,
+            textSecondary,
+            smallFont
+        );
+    }
+    else
+    {
+        const ConnectedDeviceInfo& device =
+            *selectedConnectedDevice;
+
+        drawInfoRow(
+            leftX,
+            rightRight,
+            deviceDetailsTop + 55,
+            "Name:",
+            device.name,
+            170
+        );
+
+        drawInfoRow(
+            leftX,
+            rightRight,
+            deviceDetailsTop + 82,
+            "Type:",
+            device.type,
+            170
+        );
+
+        drawInfoRow(
+            leftX,
+            rightRight,
+            deviceDetailsTop + 109,
+            "Connection:",
+            device.connectionType,
+            170
+        );
+
+        drawInfoRow(
+            leftX,
+            rightRight,
+            deviceDetailsTop + 136,
+            "Device class:",
+            device.deviceClass,
+            170
+        );
+
+        drawInfoRow(
+            leftX,
+            rightRight,
+            deviceDetailsTop + 163,
+            "Manufacturer:",
+            device.manufacturer,
+            170
+        );
+
+        drawInfoRow(
+            leftX,
+            rightRight,
+            deviceDetailsTop + 190,
+            "Status:",
+            device.status,
+            170
+        );
+
+        drawInfoRow(
+            leftX,
+            rightRight,
+            deviceDetailsTop + 217,
+            "Location:",
+            device.location,
+            170
+        );
+
+        std::string idText;
+
+        if (
+            device.vendorId == "--" &&
+            device.productId == "--"
+        )
         {
-            drawText(
-                hdc,
-                "+" +
-                    std::to_string(
-                        deviceCount -
-                        shownDeviceCount
-                    ) +
-                    " more connected device(s)",
-                leftX + 20,
-                devicesBottom - 28,
-                textSecondary,
-                smallFont
-            );
+            idText = "--";
         }
+        else
+        {
+            idText =
+                "Vendor " +
+                device.vendorId +
+                " / Product " +
+                device.productId;
+        }
+
+        drawInfoRow(
+            leftX,
+            rightRight,
+            deviceDetailsTop + 244,
+            "Vendor / Product:",
+            idText,
+            170
+        );
+
+        drawInfoRow(
+            leftX,
+            rightRight,
+            deviceDetailsTop + 271,
+            "Instance ID:",
+            device.instanceId,
+            170
+        );
+
+        drawInfoRow(
+            leftX,
+            rightRight,
+            deviceDetailsTop + 298,
+            "Hardware ID:",
+            device.hardwareId,
+            170
+        );
     }
 
 

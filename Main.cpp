@@ -30,6 +30,7 @@ bool processSortDescending =
     int selectedDiskIndex = 0;
     int systemInfoScrollOffset = 0;
     int systemInfoMaxScrollOffset = 0;
+    std::string selectedConnectedDeviceKey = "";
     std::string processSearch = "";
     bool processSearchFocused = false;
     DWORD selectedProcessPid = MAXDWORD;
@@ -622,6 +623,79 @@ if (
         return 0;
     }
 }
+// --------------------------------------------------------
+// SYSTEM INFO CONNECTED DEVICE CLICKS
+// --------------------------------------------------------
+
+if (
+    currentPage == AppPage::SystemInfo &&
+    mouseY >= 105 &&
+    mouseY <= 680
+)
+{
+    const int contentX =
+        mouseX - 225;
+
+    const int contentY =
+        mouseY +
+        systemInfoScrollOffset;
+
+    const int devicesTop = 945;
+    const int firstDeviceY =
+        devicesTop + 80;
+
+    int deviceCount =
+        static_cast<int>(
+            systemInfo.connectedDevices.size()
+        );
+
+    for (int index = 0;
+         index < deviceCount;
+         index++)
+    {
+        int column =
+            index % 2;
+
+        int row =
+            index / 2;
+
+        int itemLeft =
+            column == 0
+            ? 55
+            : 490;
+
+        int itemWidth =
+            column == 0
+            ? 390
+            : 410;
+
+        int itemY =
+            firstDeviceY +
+            row * 38;
+
+        if (
+            contentX >= itemLeft - 6 &&
+            contentX <= itemLeft + itemWidth &&
+            contentY >= itemY - 7 &&
+            contentY <= itemY + 24
+        )
+        {
+            selectedConnectedDeviceKey =
+                systemInfo.connectedDevices[
+                    index
+                ].selectionKey;
+
+            InvalidateRect(
+                hwnd,
+                nullptr,
+                FALSE
+            );
+
+            return 0;
+        }
+    }
+}
+
 // --------------------------------------------------------
 // PROCESS SCROLLBAR
 // --------------------------------------------------------

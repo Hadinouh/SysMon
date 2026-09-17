@@ -35,6 +35,16 @@ struct ConnectedDeviceInfo
 {
     std::string name = "--";
     std::string type = "Device";
+    std::string connectionType = "--";
+    std::string deviceClass = "--";
+    std::string manufacturer = "--";
+    std::string status = "--";
+    std::string location = "--";
+    std::string vendorId = "--";
+    std::string productId = "--";
+    std::string instanceId = "--";
+    std::string hardwareId = "--";
+    std::string selectionKey;
 };
 
 

@@ -38,6 +38,7 @@ extern PerformanceView performanceView;
 extern int selectedDiskIndex;
 extern int systemInfoScrollOffset;
 extern int systemInfoMaxScrollOffset;
+extern std::string selectedConnectedDeviceKey;
 
 // Shared Performance-page resource-card layout.
 // Main.cpp uses the same helpers for mouse hit-testing.

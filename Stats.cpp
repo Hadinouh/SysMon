@@ -2084,6 +2084,15 @@ namespace
                 PDWORD
             );
 
+        using GetDeviceInstanceIdFn =
+            BOOL (WINAPI *)(
+                HDEVINFO,
+                PSP_DEVINFO_DATA,
+                PSTR,
+                DWORD,
+                PDWORD
+            );
+
         using DestroyFn =
             BOOL (WINAPI *)(HDEVINFO);
 
@@ -2091,6 +2100,7 @@ namespace
         GetClassDevsFn getClassDevs = nullptr;
         EnumDeviceInfoFn enumDeviceInfo = nullptr;
         GetPropertyFn getProperty = nullptr;
+        GetDeviceInstanceIdFn getDeviceInstanceId = nullptr;
         DestroyFn destroy = nullptr;
 
         bool valid() const
@@ -2100,6 +2110,7 @@ namespace
                 getClassDevs != nullptr &&
                 enumDeviceInfo != nullptr &&
                 getProperty != nullptr &&
+                getDeviceInstanceId != nullptr &&
                 destroy != nullptr;
         }
     };
@@ -2146,6 +2157,16 @@ namespace
                         GetProcAddress(
                             functions.module,
                             "SetupDiGetDeviceRegistryPropertyA"
+                        )
+                    );
+
+                functions.getDeviceInstanceId =
+                    reinterpret_cast<
+                        SetupApiFunctions::GetDeviceInstanceIdFn
+                    >(
+                        GetProcAddress(
+                            functions.module,
+                            "SetupDiGetDeviceInstanceIdA"
                         )
                     );
 
@@ -2212,6 +2233,267 @@ namespace
                 buffer.data()
             )
         );
+    }
+
+
+    std::string toUpperCopy(
+        std::string value);
+
+
+    std::string getSetupDeviceInstanceId(
+        SetupApiFunctions& setup,
+        HDEVINFO deviceInfoSet,
+        SP_DEVINFO_DATA& deviceInfo)
+    {
+        DWORD required = 0;
+
+        setup.getDeviceInstanceId(
+            deviceInfoSet,
+            &deviceInfo,
+            nullptr,
+            0,
+            &required
+        );
+
+        if (required == 0)
+        {
+            return "";
+        }
+
+        std::vector<char> buffer(
+            static_cast<size_t>(required) + 1,
+            '\0'
+        );
+
+        if (!setup.getDeviceInstanceId(
+                deviceInfoSet,
+                &deviceInfo,
+                buffer.data(),
+                static_cast<DWORD>(
+                    buffer.size()
+                ),
+                &required
+            ))
+        {
+            return "";
+        }
+
+        return trimText(
+            buffer.data()
+        );
+    }
+
+
+    std::string queryDeviceStatus(
+        const SP_DEVINFO_DATA& deviceInfo)
+    {
+        using GetDevNodeStatusFn =
+            ULONG (WINAPI *)(
+                PULONG,
+                PULONG,
+                ULONG,
+                ULONG
+            );
+
+        static HMODULE cfgMgrModule =
+            LoadLibraryA(
+                "cfgmgr32.dll"
+            );
+
+        static GetDevNodeStatusFn
+            getDevNodeStatus =
+                cfgMgrModule
+                ? reinterpret_cast<
+                    GetDevNodeStatusFn
+                  >(
+                    GetProcAddress(
+                        cfgMgrModule,
+                        "CM_Get_DevNode_Status"
+                    )
+                  )
+                : nullptr;
+
+        if (getDevNodeStatus == nullptr)
+        {
+            return "--";
+        }
+
+        ULONG status = 0;
+        ULONG problem = 0;
+
+        ULONG result =
+            getDevNodeStatus(
+                &status,
+                &problem,
+                static_cast<ULONG>(
+                    deviceInfo.DevInst
+                ),
+                0
+            );
+
+        if (result != 0)
+        {
+            return "--";
+        }
+
+        if (problem == 0)
+        {
+            return "OK";
+        }
+
+        return
+            "Problem code " +
+            std::to_string(problem);
+    }
+
+
+    std::string extractPnPIdentifier(
+        const std::string& hardwareId,
+        const std::string& firstPrefix,
+        const std::string& secondPrefix = "")
+    {
+        std::string upper =
+            toUpperCopy(hardwareId);
+
+        size_t position =
+            upper.find(firstPrefix);
+
+        size_t prefixLength =
+            firstPrefix.size();
+
+        if (
+            position == std::string::npos &&
+            !secondPrefix.empty()
+        )
+        {
+            position =
+                upper.find(secondPrefix);
+
+            prefixLength =
+                secondPrefix.size();
+        }
+
+        if (
+            position == std::string::npos ||
+            position + prefixLength >=
+                upper.size()
+        )
+        {
+            return "--";
+        }
+
+        size_t start =
+            position + prefixLength;
+
+        size_t end = start;
+
+        while (
+            end < upper.size() &&
+            end - start < 8
+        )
+        {
+            char c = upper[end];
+
+            if (!std::isalnum(
+                    static_cast<unsigned char>(c)
+                ))
+            {
+                break;
+            }
+
+            end++;
+        }
+
+        if (end == start)
+        {
+            return "--";
+        }
+
+        return upper.substr(
+            start,
+            end - start
+        );
+    }
+
+
+    std::string deviceConnectionType(
+        const std::string& enumerator,
+        const std::string& className)
+    {
+        std::string enumUpper =
+            toUpperCopy(enumerator);
+
+        std::string classUpper =
+            toUpperCopy(className);
+
+        if (
+            enumUpper.find("USB") !=
+            std::string::npos
+        )
+        {
+            return "USB";
+        }
+
+        if (
+            enumUpper.find("BTH") !=
+                std::string::npos ||
+            enumUpper.find("BLUETOOTH") !=
+                std::string::npos
+        )
+        {
+            return "Bluetooth";
+        }
+
+        if (
+            enumUpper.find("HID") !=
+            std::string::npos
+        )
+        {
+            return "HID";
+        }
+
+        if (classUpper == "MONITOR")
+        {
+            return "Display";
+        }
+
+        if (
+            classUpper == "MEDIA" ||
+            classUpper == "AUDIOENDPOINT"
+        )
+        {
+            return "Audio";
+        }
+
+        if (classUpper == "CAMERA")
+        {
+            return "Camera";
+        }
+
+        if (classUpper == "IMAGE")
+        {
+            return "Imaging";
+        }
+
+        if (classUpper == "PRINTER")
+        {
+            return "Printer";
+        }
+
+        if (
+            classUpper == "KEYBOARD" ||
+            classUpper == "MOUSE"
+        )
+        {
+            return "HID";
+        }
+
+        if (!enumerator.empty())
+        {
+            return enumerator;
+        }
+
+        return "PnP";
     }
 
 
@@ -2922,12 +3204,14 @@ namespace
             std::string upperName =
                 toUpperCopy(name);
 
-            if (upperName.find(
+            if (
+                upperName.find(
                     "HOST CONTROLLER"
                 ) != std::string::npos ||
                 upperName.find(
                     "ROOT HUB"
-                ) != std::string::npos)
+                ) != std::string::npos
+            )
             {
                 continue;
             }
@@ -2970,12 +3254,106 @@ namespace
             device.name = name;
             device.type = type;
 
+            device.connectionType =
+                deviceConnectionType(
+                    enumerator,
+                    className
+                );
+
+            device.deviceClass =
+                !className.empty()
+                ? className
+                : "--";
+
+            std::string manufacturer =
+                getSetupDeviceProperty(
+                    setup,
+                    set,
+                    info,
+                    SPDRP_MFG
+                );
+
+            if (!manufacturer.empty())
+            {
+                device.manufacturer =
+                    manufacturer;
+            }
+
+            std::string location =
+                getSetupDeviceProperty(
+                    setup,
+                    set,
+                    info,
+                    SPDRP_LOCATION_INFORMATION
+                );
+
+            if (!location.empty())
+            {
+                device.location =
+                    location;
+            }
+
+            std::string instanceId =
+                getSetupDeviceInstanceId(
+                    setup,
+                    set,
+                    info
+                );
+
+            if (!instanceId.empty())
+            {
+                device.instanceId =
+                    instanceId;
+
+                device.selectionKey =
+                    instanceId;
+            }
+
+            std::string hardwareId =
+                getSetupDeviceProperty(
+                    setup,
+                    set,
+                    info,
+                    SPDRP_HARDWAREID
+                );
+
+            if (!hardwareId.empty())
+            {
+                device.hardwareId =
+                    hardwareId;
+
+                device.vendorId =
+                    extractPnPIdentifier(
+                        hardwareId,
+                        "VID_",
+                        "VEN_"
+                    );
+
+                device.productId =
+                    extractPnPIdentifier(
+                        hardwareId,
+                        "PID_",
+                        "DEV_"
+                    );
+            }
+
+            if (device.selectionKey.empty())
+            {
+                device.selectionKey =
+                    key;
+            }
+
+            device.status =
+                queryDeviceStatus(
+                    info
+                );
+
             systemInfo.connectedDevices.push_back(
                 device
             );
 
             if (systemInfo.connectedDevices.size() >=
-                40)
+                80)
             {
                 break;
             }
