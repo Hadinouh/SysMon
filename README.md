@@ -2,15 +2,17 @@
 
 SysMon is a native Windows system monitoring application built in C++ using the Win32 API and GDI.
 
-It provides real-time CPU, memory, disk, process, and system uptime monitoring through a dark desktop dashboard. SysMon also includes a movable desktop widget and Windows system tray integration.
+It provides real-time CPU, memory, disk, process, hardware, device, and system monitoring through a dark desktop dashboard. SysMon also includes a movable desktop widget and Windows system tray integration.
 
 ## Current Version
 
-### v0.7.0
+### v0.8.0
 
-SysMon v0.7 introduces a redesigned Performance page with detailed real-time monitoring for CPU, memory, and physical disks.
+SysMon v0.8 introduces the new System Info / About PC page.
 
-The Performance page now includes live history graphs, hardware information, detailed memory statistics, real disk activity monitoring, and support for multiple physical disks.
+The page provides detailed Windows, CPU, memory, graphics, storage, network, motherboard, BIOS, and connected-device information using real Windows system data.
+
+Connected devices can also be selected to view detailed Plug and Play information including device class, manufacturer, connection type, hardware ID, instance ID, VID/PID information, location, and device status.
 
 ## Features
 
@@ -31,6 +33,7 @@ The Performance page now includes live history graphs, hardware information, det
 - SSD, NVMe, SATA, and HDD identification
 - System disk and page file detection
 - System uptime tracking
+
 - Real-time process monitoring
 - Process CPU usage
 - Process memory usage
@@ -42,6 +45,39 @@ The Performance page now includes live history graphs, hardware information, det
 - Process termination with confirmation
 - Process-tree termination
 - Protection for critical Windows processes and SysMon
+
+- Detailed Windows operating system information
+- Computer name and system architecture
+- CPU model, cores, threads, socket, and cache information
+- Installed memory, memory type, speed, slots, and form factor
+- GPU model, VRAM, driver version, and driver date
+- DirectX version detection
+- Physical storage information
+- Network adapter information
+- IPv4 and IPv6 information
+- System manufacturer and model
+- Motherboard manufacturer and model
+- BIOS vendor, version, and release date
+
+- Connected device detection
+- USB device detection
+- Bluetooth device detection
+- HID device detection
+- Monitor and display detection
+- Audio device detection
+- Camera, printer, keyboard, and mouse detection
+- Selectable connected devices
+- Device manufacturer information
+- Device class information
+- Device status information
+- Device connection type
+- Device instance ID
+- Hardware ID
+- USB VID and PID information
+- Physical device location information
+- Automatic device refresh when hardware changes
+
+- Scrollable System Info page
 - Dark native Windows interface
 - Desktop CPU/RAM widget
 - Draggable desktop widget
@@ -125,6 +161,113 @@ The page also includes search and filtering, process selection, Parent PID infor
 
 Protected processes such as System Idle Process, System, and SysMon itself cannot be terminated through the application.
 
+## System Info
+
+SysMon v0.8 introduces a detailed System Info / About PC page.
+
+### Operating System
+
+- Windows edition
+- Windows version
+- Installation date
+- OS build
+- Windows Feature Experience Pack information
+- System architecture
+- Computer name
+
+### Processor
+
+- CPU model
+- Physical core count
+- Logical processor count
+- Base speed
+- Current reported speed
+- CPU socket
+- Virtualization status
+- L1 cache
+- L2 cache
+- L3 cache
+
+### Memory
+
+- Installed memory
+- Memory type
+- Memory speed
+- Slots used
+- Memory form factor
+
+### Graphics
+
+- GPU model
+- Video memory
+- Driver version
+- Driver date
+- DirectX version
+
+### Storage
+
+SysMon lists detected physical storage devices and displays:
+
+- Disk number
+- Drive letters
+- Disk model
+- Capacity
+- SSD / HDD identification
+- NVMe / SATA / USB storage type
+
+### Network
+
+- Active network adapter
+- Connection type
+- IPv4 address
+- IPv6 address
+
+### System and Motherboard
+
+- System manufacturer
+- System model
+- Motherboard manufacturer
+- Motherboard model
+
+### BIOS / Firmware
+
+- BIOS vendor
+- BIOS version
+- BIOS release date
+
+## Connected Devices
+
+SysMon can enumerate currently present Windows Plug and Play devices.
+
+Supported device categories include:
+
+- USB
+- Bluetooth
+- HID
+- Audio devices
+- Monitors
+- Cameras
+- Printers
+- Keyboards
+- Mice
+- Other user-facing Plug and Play devices
+
+Devices can be selected to display additional information including:
+
+- Device name
+- Connection type
+- Device class
+- Manufacturer
+- Device status
+- Problem code when available
+- Physical device location
+- Vendor ID
+- Product ID
+- Device instance ID
+- Hardware ID
+
+The connected-device list automatically refreshes when Windows reports hardware changes.
+
 ## Desktop Widget
 
 When SysMon is minimized, it can move to the Windows system tray and display a small desktop widget.
@@ -134,6 +277,36 @@ The widget displays live CPU and RAM usage with progress bars.
 The widget can be dragged anywhere on the desktop. Its position and enabled state are stored in `SysMon.ini` and restored the next time SysMon starts.
 
 ## Version History
+
+### v0.8.0
+
+- Added the System Info / About PC page
+- Added detailed Windows operating system information
+- Added computer name and system architecture information
+- Added detailed CPU information
+- Added CPU core, thread, socket, virtualization, and cache information
+- Added installed memory information
+- Added memory type, speed, slot, and form-factor information
+- Added GPU model and VRAM information
+- Added GPU driver version and driver date
+- Added DirectX version detection
+- Added physical storage information to System Info
+- Added network adapter information
+- Added IPv4 and IPv6 information
+- Added system manufacturer and model information
+- Added motherboard manufacturer and model information
+- Added BIOS vendor, version, and release date
+- Added connected Plug and Play device detection
+- Added USB, Bluetooth, HID, display, audio, camera, printer, keyboard, and mouse detection
+- Added selectable connected devices
+- Added detailed device information
+- Added device manufacturer and class information
+- Added device status and problem-code information
+- Added device instance ID and hardware ID
+- Added USB VID/PID detection
+- Added physical device location information
+- Added automatic device refresh on Windows hardware changes
+- Added scrolling support to the System Info page
 
 ### v0.7.0
 
