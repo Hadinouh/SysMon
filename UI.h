@@ -25,7 +25,72 @@ enum class ProcessSort
     Threads,
     PID
 };
+enum class PerformanceView
+{
+    CPU,
+    Memory,
+    Disk,
+    GPU,
+    Network
+};
 
+extern PerformanceView performanceView;
+extern int selectedDiskIndex;
+
+// Shared Performance-page resource-card layout.
+// Main.cpp uses the same helpers for mouse hit-testing.
+constexpr int performanceDiskCardStartY = 320;
+constexpr int performanceDiskCardHeight = 70;
+constexpr int performanceDiskCardGap = 15;
+constexpr int performanceMaxVisibleDiskCards = 3;
+
+inline int performanceVisibleDiskCardCount(
+    size_t diskCount)
+{
+    int count =
+        static_cast<int>(diskCount);
+
+    if (count < 1)
+        count = 1;
+
+    if (count > performanceMaxVisibleDiskCards)
+        count = performanceMaxVisibleDiskCards;
+
+    return count;
+}
+
+inline int performanceDiskCardTop(
+    int index)
+{
+    return
+        performanceDiskCardStartY +
+        index *
+        (performanceDiskCardHeight +
+         performanceDiskCardGap);
+}
+
+inline int performanceGpuCardTop(
+    size_t diskCount)
+{
+    return
+        performanceDiskCardStartY +
+        performanceVisibleDiskCardCount(
+            diskCount
+        ) *
+        (performanceDiskCardHeight +
+         performanceDiskCardGap);
+}
+
+inline int performanceNetworkCardTop(
+    size_t diskCount)
+{
+    return
+        performanceGpuCardTop(
+            diskCount
+        ) +
+        performanceDiskCardHeight +
+        performanceDiskCardGap;
+}
 extern ProcessSort processSort;
 extern bool processSortDescending;
 
