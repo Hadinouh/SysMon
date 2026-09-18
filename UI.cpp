@@ -5260,7 +5260,7 @@ else if (currentPage == AppPage::Temperatures)
             );
 
             int gpuNameX =
-                890 - gpuExtent.cx;
+                815 - gpuExtent.cx;
 
             if (gpuNameX < 575)
             {
@@ -5763,7 +5763,7 @@ else if (currentPage == AppPage::Temperatures)
 
         drawText(
             hdc,
-            "Firmware thermal zones and motherboard-level information exposed by Windows.",
+           "Live motherboard and firmware temperature sensors detected by SysMon.",
             37,
             216,
             textSecondary,
@@ -5934,7 +5934,7 @@ else if (currentPage == AppPage::Temperatures)
         for (
             size_t index = 0;
             index < temperatureStats.motherboardSensors.size() &&
-            drawnSensorCount < 6;
+            drawnSensorCount < 7;
             index++
         )
         {
@@ -5942,7 +5942,7 @@ else if (currentPage == AppPage::Temperatures)
                 temperatureStats.motherboardSensors[index];
 
             int sensorY =
-                365 + drawnSensorCount * 25;
+                365 + drawnSensorCount * 23;
 
             drawText(
                 hdc,
@@ -5968,7 +5968,7 @@ else if (currentPage == AppPage::Temperatures)
         for (
             size_t index = 0;
             index < temperatureStats.sensors.size() &&
-            drawnSensorCount < 6;
+            drawnSensorCount < 7;
             index++
         )
         {
@@ -5976,7 +5976,7 @@ else if (currentPage == AppPage::Temperatures)
                 temperatureStats.sensors[index];
 
             int sensorY =
-                365 + drawnSensorCount * 25;
+                365 + drawnSensorCount * 23;
 
             drawText(
                 hdc,
@@ -6093,7 +6093,7 @@ else if (currentPage == AppPage::Temperatures)
 
         drawText(
             hdc,
-            "Windows exposes firmware thermal zones, not every board sensor.",
+           "SysMon reads available motherboard and firmware temperature sensors.",
             480,
             590,
             textSecondary,
@@ -6102,7 +6102,7 @@ else if (currentPage == AppPage::Temperatures)
 
         drawText(
             hdc,
-            "Unavailable sensors remain -- instead of using estimated values.",
+           "Unavailable sensors remain unavailable rather than using estimated values.",
             480,
             620,
             textSecondary,
