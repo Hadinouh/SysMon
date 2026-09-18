@@ -36,6 +36,7 @@ enum class PerformanceView
 
 extern PerformanceView performanceView;
 extern int selectedDiskIndex;
+extern int selectedGpuIndex;
 extern int systemInfoScrollOffset;
 extern int systemInfoMaxScrollOffset;
 extern std::string selectedConnectedDeviceKey;
@@ -72,27 +73,45 @@ inline int performanceDiskCardTop(
          performanceDiskCardGap);
 }
 
+inline int performanceVisibleGpuCardCount(
+    size_t gpuCount)
+{
+    int count =
+        static_cast<int>(gpuCount);
+
+    if (count < 1)
+        count = 1;
+
+    return count;
+}
+
 inline int performanceGpuCardTop(
-    size_t diskCount)
+    size_t diskCount,
+    int gpuIndex = 0)
 {
     return
         performanceDiskCardStartY +
-        performanceVisibleDiskCardCount(
-            diskCount
+        (
+            performanceVisibleDiskCardCount(
+                diskCount
+            ) +
+            gpuIndex
         ) *
         (performanceDiskCardHeight +
          performanceDiskCardGap);
 }
 
 inline int performanceNetworkCardTop(
-    size_t diskCount)
+    size_t diskCount,
+    size_t gpuCount)
 {
     return
         performanceGpuCardTop(
-            diskCount
-        ) +
-        performanceDiskCardHeight +
-        performanceDiskCardGap;
+            diskCount,
+            performanceVisibleGpuCardCount(
+                gpuCount
+            )
+        );
 }
 extern ProcessSort processSort;
 extern bool processSortDescending;

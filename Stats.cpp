@@ -8,6 +8,8 @@
 #include "Stats.h"
 
 #include <ws2tcpip.h>
+#include <pdh.h>
+#include <pdhmsg.h>
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -18,6 +20,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <cstdlib>
 #include <winioctl.h>
 
 
@@ -33,6 +36,7 @@ double totalDiskGB = 0.0;
 int diskPercent = 0;
 
 std::vector<DiskStats> diskStats;
+std::vector<GpuStats> gpuStats;
 SystemInfoData systemInfo;
 
 ULONGLONG uptimeSeconds = 0;
@@ -2759,6 +2763,1552 @@ namespace
     }
 
 
+    // ============================================================
+    // GPU PERFORMANCE / MULTI-GPU BACKEND
+    // ============================================================
+
+    ULONGLONG lastGpuEnumerationTick = 0;
+
+
+    void pushGpuHistory(
+        std::vector<double>& history,
+        double value)
+    {
+        history.push_back(value);
+
+        if (history.size() > 120)
+        {
+            history.erase(history.begin());
+        }
+    }
+
+
+    std::string normalizeDisplayRegistryPath(
+        std::string path)
+    {
+        const std::string prefix =
+            "\\Registry\\Machine\\";
+
+        if (
+            path.size() >= prefix.size() &&
+            _strnicmp(
+                path.c_str(),
+                prefix.c_str(),
+                prefix.size()
+            ) == 0
+        )
+        {
+            path.erase(0, prefix.size());
+        }
+
+        return path;
+    }
+
+
+    std::string gpuVendorFromDeviceId(
+        const std::string& deviceId,
+        const std::string& name)
+    {
+        std::string upper =
+            toUpperCopy(deviceId + " " + name);
+
+        if (upper.find("VEN_10DE") !=
+                std::string::npos ||
+            upper.find("NVIDIA") !=
+                std::string::npos)
+        {
+            return "NVIDIA";
+        }
+
+        if (upper.find("VEN_1002") !=
+                std::string::npos ||
+            upper.find("AMD") !=
+                std::string::npos ||
+            upper.find("RADEON") !=
+                std::string::npos)
+        {
+            return "AMD";
+        }
+
+        if (upper.find("VEN_8086") !=
+                std::string::npos ||
+            upper.find("INTEL") !=
+                std::string::npos)
+        {
+            return "Intel";
+        }
+
+        return "--";
+    }
+
+
+    std::string detectDirectXRuntime()
+    {
+        HMODULE module =
+            LoadLibraryA("d3d12.dll");
+
+        if (module != nullptr)
+        {
+            FreeLibrary(module);
+            return "12";
+        }
+
+        module =
+            LoadLibraryA("d3d11.dll");
+
+        if (module != nullptr)
+        {
+            FreeLibrary(module);
+            return "11";
+        }
+
+        return "--";
+    }
+
+
+    void enumerateGpuAdapters()
+    {
+        std::vector<GpuStats> oldStats =
+            gpuStats;
+
+        std::vector<GpuStats> refreshed;
+        std::set<std::string> seen;
+
+        MEMORYSTATUSEX memory = {};
+        memory.dwLength = sizeof(memory);
+        GlobalMemoryStatusEx(&memory);
+
+        const std::string directX =
+            detectDirectXRuntime();
+
+        for (DWORD displayIndex = 0;;
+             displayIndex++)
+        {
+            DISPLAY_DEVICEA device = {};
+            device.cb = sizeof(device);
+
+            if (!EnumDisplayDevicesA(
+                    nullptr,
+                    displayIndex,
+                    &device,
+                    0
+                ))
+            {
+                break;
+            }
+
+            if (
+                (device.StateFlags &
+                 DISPLAY_DEVICE_MIRRORING_DRIVER) != 0
+            )
+            {
+                continue;
+            }
+
+            std::string name =
+                trimText(device.DeviceString);
+
+            if (name.empty())
+            {
+                continue;
+            }
+
+            std::string upperName =
+                toUpperCopy(name);
+
+            if (
+                upperName.find(
+                    "MICROSOFT BASIC DISPLAY"
+                ) != std::string::npos ||
+                upperName.find(
+                    "REMOTE DISPLAY"
+                ) != std::string::npos
+            )
+            {
+                continue;
+            }
+
+            // EnumDisplayDevices can expose more than one logical
+            // display entry for the same physical GPU. DeviceName is
+            // different for those entries, so using DeviceName in the
+            // identity makes one card appear multiple times.
+            //
+            // The Control\Video GUID in DeviceKey identifies the actual
+            // adapter much more reliably. Strip the final \0000/\0001
+            // driver sub-key so multiple logical heads of one GPU collapse
+            // into a single physical adapter, while two separate physical
+            // GPUs still keep separate GUIDs.
+            std::string registryPath =
+                normalizeDisplayRegistryPath(
+                    device.DeviceKey
+                );
+
+            std::string adapterIdentity =
+                registryPath;
+
+            if (!adapterIdentity.empty())
+            {
+                size_t lastSlash =
+                    adapterIdentity.find_last_of(
+                        "\\/"
+                    );
+
+                if (lastSlash !=
+                    std::string::npos)
+                {
+                    adapterIdentity.erase(
+                        lastSlash
+                    );
+                }
+            }
+
+            if (adapterIdentity.empty())
+            {
+                adapterIdentity =
+                    std::string(device.DeviceID);
+            }
+
+            if (adapterIdentity.empty())
+            {
+                adapterIdentity =
+                    std::string(device.DeviceName) +
+                    "|" +
+                    name;
+            }
+
+            std::string stableId =
+                toUpperCopy(adapterIdentity);
+
+            if (!seen.insert(stableId).second)
+            {
+                continue;
+            }
+
+            GpuStats gpu;
+            gpu.index =
+                static_cast<int>(refreshed.size());
+            gpu.physicalIndex = gpu.index;
+            gpu.stableId = stableId;
+            gpu.name = name;
+            gpu.vendor =
+                gpuVendorFromDeviceId(
+                    device.DeviceID,
+                    name
+                );
+            gpu.directXVersion = directX;
+
+            if (!registryPath.empty())
+            {
+                ULONGLONG videoMemory = 0;
+
+                readRegistryQword(
+                    HKEY_LOCAL_MACHINE,
+                    registryPath,
+                    "HardwareInformation.qwMemorySize",
+                    videoMemory
+                );
+
+                if (videoMemory == 0)
+                {
+                    DWORD memory32 = 0;
+
+                    if (readRegistryDword(
+                            HKEY_LOCAL_MACHINE,
+                            registryPath,
+                            "HardwareInformation.MemorySize",
+                            memory32
+                        ))
+                    {
+                        videoMemory = memory32;
+                    }
+                }
+
+                gpu.dedicatedMemoryTotalBytes =
+                    videoMemory;
+
+                std::string version =
+                    readRegistryString(
+                        HKEY_LOCAL_MACHINE,
+                        registryPath,
+                        "DriverVersion"
+                    );
+
+                std::string date =
+                    readRegistryString(
+                        HKEY_LOCAL_MACHINE,
+                        registryPath,
+                        "DriverDate"
+                    );
+
+                if (!version.empty())
+                {
+                    gpu.driverVersion = version;
+                }
+
+                if (!date.empty())
+                {
+                    gpu.driverDate = date;
+                }
+            }
+
+            if (memory.ullTotalPhys > 0)
+            {
+                gpu.sharedMemoryTotalBytes =
+                    static_cast<unsigned long long>(
+                        memory.ullTotalPhys / 2ULL
+                    );
+            }
+
+            for (const GpuStats& oldGpu :
+                 oldStats)
+            {
+                if (oldGpu.stableId ==
+                    gpu.stableId)
+                {
+                    gpu.utilizationHistory =
+                        oldGpu.utilizationHistory;
+                    gpu.dedicatedMemoryHistory =
+                        oldGpu.dedicatedMemoryHistory;
+                    gpu.sharedMemoryHistory =
+                        oldGpu.sharedMemoryHistory;
+                    gpu.encodeHistory =
+                        oldGpu.encodeHistory;
+                    gpu.decodeHistory =
+                        oldGpu.decodeHistory;
+
+                    gpu.busInterface =
+                        oldGpu.busInterface;
+                    gpu.computeCores =
+                        oldGpu.computeCores;
+                    gpu.hardwareReservedMemory =
+                        oldGpu.hardwareReservedMemory;
+                    break;
+                }
+            }
+
+            refreshed.push_back(gpu);
+        }
+
+        gpuStats = std::move(refreshed);
+    }
+
+
+    int parseGpuPhysicalIndex(
+        const std::wstring& instance)
+    {
+        size_t position =
+            instance.find(L"phys_");
+
+        if (position == std::wstring::npos)
+        {
+            return -1;
+        }
+
+        position += 5;
+
+        int value = 0;
+        bool found = false;
+
+        while (
+            position < instance.size() &&
+            instance[position] >= L'0' &&
+            instance[position] <= L'9'
+        )
+        {
+            found = true;
+            value =
+                value * 10 +
+                static_cast<int>(
+                    instance[position] - L'0'
+                );
+            position++;
+        }
+
+        return found ? value : -1;
+    }
+
+
+    struct PdhFunctions
+    {
+        using OpenQueryFn =
+            PDH_STATUS (WINAPI *)(
+                LPCWSTR,
+                DWORD_PTR,
+                PDH_HQUERY*
+            );
+
+        using AddEnglishCounterFn =
+            PDH_STATUS (WINAPI *)(
+                PDH_HQUERY,
+                LPCWSTR,
+                DWORD_PTR,
+                PDH_HCOUNTER*
+            );
+
+        using CollectQueryDataFn =
+            PDH_STATUS (WINAPI *)(
+                PDH_HQUERY
+            );
+
+        using GetFormattedCounterArrayFn =
+            PDH_STATUS (WINAPI *)(
+                PDH_HCOUNTER,
+                DWORD,
+                LPDWORD,
+                LPDWORD,
+                PPDH_FMT_COUNTERVALUE_ITEM_W
+            );
+
+        using CloseQueryFn =
+            PDH_STATUS (WINAPI *)(
+                PDH_HQUERY
+            );
+
+        HMODULE module = nullptr;
+        OpenQueryFn openQuery = nullptr;
+        AddEnglishCounterFn addEnglishCounter = nullptr;
+        CollectQueryDataFn collectQueryData = nullptr;
+        GetFormattedCounterArrayFn getFormattedCounterArray = nullptr;
+        CloseQueryFn closeQuery = nullptr;
+
+        bool valid() const
+        {
+            return
+                module != nullptr &&
+                openQuery != nullptr &&
+                addEnglishCounter != nullptr &&
+                collectQueryData != nullptr &&
+                getFormattedCounterArray != nullptr &&
+                closeQuery != nullptr;
+        }
+    };
+
+
+    PdhFunctions& getPdhFunctions()
+    {
+        static PdhFunctions functions;
+        static bool initialized = false;
+
+        if (!initialized)
+        {
+            initialized = true;
+            functions.module =
+                LoadLibraryA("pdh.dll");
+
+            if (functions.module != nullptr)
+            {
+                functions.openQuery =
+                    reinterpret_cast<
+                        PdhFunctions::OpenQueryFn
+                    >(
+                        GetProcAddress(
+                            functions.module,
+                            "PdhOpenQueryW"
+                        )
+                    );
+
+                functions.addEnglishCounter =
+                    reinterpret_cast<
+                        PdhFunctions::AddEnglishCounterFn
+                    >(
+                        GetProcAddress(
+                            functions.module,
+                            "PdhAddEnglishCounterW"
+                        )
+                    );
+
+                functions.collectQueryData =
+                    reinterpret_cast<
+                        PdhFunctions::CollectQueryDataFn
+                    >(
+                        GetProcAddress(
+                            functions.module,
+                            "PdhCollectQueryData"
+                        )
+                    );
+
+                functions.getFormattedCounterArray =
+                    reinterpret_cast<
+                        PdhFunctions::GetFormattedCounterArrayFn
+                    >(
+                        GetProcAddress(
+                            functions.module,
+                            "PdhGetFormattedCounterArrayW"
+                        )
+                    );
+
+                functions.closeQuery =
+                    reinterpret_cast<
+                        PdhFunctions::CloseQueryFn
+                    >(
+                        GetProcAddress(
+                            functions.module,
+                            "PdhCloseQuery"
+                        )
+                    );
+            }
+        }
+
+        return functions;
+    }
+
+
+    struct GpuPdhState
+    {
+        bool initialized = false;
+        PDH_HQUERY query = nullptr;
+        PDH_HCOUNTER engine = nullptr;
+        PDH_HCOUNTER dedicated = nullptr;
+        PDH_HCOUNTER shared = nullptr;
+    };
+
+
+    GpuPdhState& getGpuPdhState()
+    {
+        static GpuPdhState state;
+
+        if (state.initialized)
+        {
+            return state;
+        }
+
+        state.initialized = true;
+
+        PdhFunctions& pdh =
+            getPdhFunctions();
+
+        if (!pdh.valid())
+        {
+            return state;
+        }
+
+        if (pdh.openQuery(
+                nullptr,
+                0,
+                &state.query
+            ) != ERROR_SUCCESS)
+        {
+            state.query = nullptr;
+            return state;
+        }
+
+        if (pdh.addEnglishCounter(
+                state.query,
+                L"\\GPU Engine(*)\\Utilization Percentage",
+                0,
+                &state.engine
+            ) != ERROR_SUCCESS)
+        {
+            state.engine = nullptr;
+        }
+
+        if (pdh.addEnglishCounter(
+                state.query,
+                L"\\GPU Adapter Memory(*)\\Dedicated Usage",
+                0,
+                &state.dedicated
+            ) != ERROR_SUCCESS)
+        {
+            state.dedicated = nullptr;
+        }
+
+        if (pdh.addEnglishCounter(
+                state.query,
+                L"\\GPU Adapter Memory(*)\\Shared Usage",
+                0,
+                &state.shared
+            ) != ERROR_SUCCESS)
+        {
+            state.shared = nullptr;
+        }
+
+        return state;
+    }
+
+
+    std::vector<std::pair<std::wstring, double>>
+    readPdhCounterArray(
+        PDH_HCOUNTER counter)
+    {
+        std::vector<std::pair<std::wstring, double>>
+            result;
+
+        if (counter == nullptr)
+        {
+            return result;
+        }
+
+        PdhFunctions& pdh =
+            getPdhFunctions();
+
+        if (!pdh.valid())
+        {
+            return result;
+        }
+
+        DWORD bytes = 0;
+        DWORD itemCount = 0;
+
+        PDH_STATUS status =
+            pdh.getFormattedCounterArray(
+                counter,
+                PDH_FMT_DOUBLE,
+                &bytes,
+                &itemCount,
+                nullptr
+            );
+
+        if (
+            status != PDH_MORE_DATA ||
+            bytes == 0 ||
+            itemCount == 0
+        )
+        {
+            return result;
+        }
+
+        std::vector<BYTE> buffer(bytes);
+
+        auto* items =
+            reinterpret_cast<
+                PPDH_FMT_COUNTERVALUE_ITEM_W
+            >(
+                buffer.data()
+            );
+
+        status =
+            pdh.getFormattedCounterArray(
+                counter,
+                PDH_FMT_DOUBLE,
+                &bytes,
+                &itemCount,
+                items
+            );
+
+        if (status != ERROR_SUCCESS)
+        {
+            return result;
+        }
+
+        for (DWORD index = 0;
+             index < itemCount;
+             index++)
+        {
+            if (
+                items[index].FmtValue.CStatus !=
+                    PDH_CSTATUS_VALID_DATA &&
+                items[index].FmtValue.CStatus !=
+                    PDH_CSTATUS_NEW_DATA
+            )
+            {
+                continue;
+            }
+
+            if (items[index].szName == nullptr)
+            {
+                continue;
+            }
+
+            double value =
+                items[index].FmtValue.doubleValue;
+
+            if (value < 0.0)
+            {
+                value = 0.0;
+            }
+
+            result.push_back(
+                {
+                    items[index].szName,
+                    value
+                }
+            );
+        }
+
+        return result;
+    }
+
+
+    void updateGpuPdhMetrics()
+    {
+        if (gpuStats.empty())
+        {
+            return;
+        }
+
+        GpuPdhState& state =
+            getGpuPdhState();
+
+        PdhFunctions& pdh =
+            getPdhFunctions();
+
+        if (
+            state.query == nullptr ||
+            !pdh.valid()
+        )
+        {
+            return;
+        }
+
+        if (pdh.collectQueryData(
+                state.query
+            ) != ERROR_SUCCESS)
+        {
+            return;
+        }
+
+        std::map<int, double> threeD;
+        std::map<int, double> encode;
+        std::map<int, double> decode;
+        std::map<int, double> allEngines;
+        std::map<int, double> dedicated;
+        std::map<int, double> shared;
+
+        for (const auto& item :
+             readPdhCounterArray(
+                 state.engine
+             ))
+        {
+            int physicalIndex =
+                parseGpuPhysicalIndex(
+                    item.first
+                );
+
+            if (physicalIndex < 0)
+            {
+                continue;
+            }
+
+            const std::wstring& name =
+                item.first;
+
+            allEngines[physicalIndex] +=
+                item.second;
+
+            if (name.find(
+                    L"engtype_3D"
+                ) != std::wstring::npos)
+            {
+                threeD[physicalIndex] +=
+                    item.second;
+            }
+            else if (
+                name.find(
+                    L"engtype_VideoEncode"
+                ) != std::wstring::npos
+            )
+            {
+                encode[physicalIndex] +=
+                    item.second;
+            }
+            else if (
+                name.find(
+                    L"engtype_VideoDecode"
+                ) != std::wstring::npos
+            )
+            {
+                decode[physicalIndex] +=
+                    item.second;
+            }
+        }
+
+        for (const auto& item :
+             readPdhCounterArray(
+                 state.dedicated
+             ))
+        {
+            int physicalIndex =
+                parseGpuPhysicalIndex(
+                    item.first
+                );
+
+            if (physicalIndex >= 0)
+            {
+                dedicated[physicalIndex] +=
+                    item.second;
+            }
+        }
+
+        for (const auto& item :
+             readPdhCounterArray(
+                 state.shared
+             ))
+        {
+            int physicalIndex =
+                parseGpuPhysicalIndex(
+                    item.first
+                );
+
+            if (physicalIndex >= 0)
+            {
+                shared[physicalIndex] +=
+                    item.second;
+            }
+        }
+
+        for (GpuStats& gpu : gpuStats)
+        {
+            int physicalIndex =
+                gpu.physicalIndex;
+
+            bool hasPerformanceData = false;
+
+            auto threeDIt =
+                threeD.find(physicalIndex);
+
+            if (threeDIt != threeD.end())
+            {
+                gpu.utilizationPercent =
+                    std::clamp(
+                        threeDIt->second,
+                        0.0,
+                        100.0
+                    );
+                hasPerformanceData = true;
+            }
+            else
+            {
+                auto allIt =
+                    allEngines.find(
+                        physicalIndex
+                    );
+
+                if (allIt != allEngines.end())
+                {
+                    gpu.utilizationPercent =
+                        std::clamp(
+                            allIt->second,
+                            0.0,
+                            100.0
+                        );
+                    hasPerformanceData = true;
+                }
+            }
+
+            auto encodeIt =
+                encode.find(physicalIndex);
+
+            if (encodeIt != encode.end())
+            {
+                gpu.encodePercent =
+                    std::clamp(
+                        encodeIt->second,
+                        0.0,
+                        100.0
+                    );
+                hasPerformanceData = true;
+            }
+            else
+            {
+                gpu.encodePercent = 0.0;
+            }
+
+            auto decodeIt =
+                decode.find(physicalIndex);
+
+            if (decodeIt != decode.end())
+            {
+                gpu.decodePercent =
+                    std::clamp(
+                        decodeIt->second,
+                        0.0,
+                        100.0
+                    );
+                hasPerformanceData = true;
+            }
+            else
+            {
+                gpu.decodePercent = 0.0;
+            }
+
+            auto dedicatedIt =
+                dedicated.find(physicalIndex);
+
+            if (dedicatedIt != dedicated.end())
+            {
+                gpu.dedicatedMemoryUsedBytes =
+                    static_cast<unsigned long long>(
+                        dedicatedIt->second
+                    );
+                hasPerformanceData = true;
+            }
+
+            auto sharedIt =
+                shared.find(physicalIndex);
+
+            if (sharedIt != shared.end())
+            {
+                gpu.sharedMemoryUsedBytes =
+                    static_cast<unsigned long long>(
+                        sharedIt->second
+                    );
+                hasPerformanceData = true;
+            }
+
+            gpu.performanceValid =
+                hasPerformanceData;
+        }
+    }
+
+
+    // ------------------------------------------------------------
+    // Optional NVIDIA NVML enrichment.
+    // Generic GPU discovery/usage still works without NVML.  NVML
+    // is only used for vendor sensor data such as temperature/fan/
+    // power and extra PCIe information when an NVIDIA driver exposes
+    // the library.
+    // ------------------------------------------------------------
+
+    struct nvmlDevice_st;
+    using nvmlDevice_t = nvmlDevice_st*;
+    using nvmlReturn_t = int;
+
+    struct NvmlUtilization
+    {
+        unsigned int gpu = 0;
+        unsigned int memory = 0;
+    };
+
+    struct NvmlMemory
+    {
+        unsigned long long total = 0;
+        unsigned long long free = 0;
+        unsigned long long used = 0;
+    };
+
+    struct NvmlFunctions
+    {
+        using InitFn = nvmlReturn_t (*)();
+        using GetCountFn =
+            nvmlReturn_t (*)(unsigned int*);
+        using GetHandleFn =
+            nvmlReturn_t (*)(
+                unsigned int,
+                nvmlDevice_t*
+            );
+        using GetNameFn =
+            nvmlReturn_t (*)(
+                nvmlDevice_t,
+                char*,
+                unsigned int
+            );
+        using GetTemperatureFn =
+            nvmlReturn_t (*)(
+                nvmlDevice_t,
+                int,
+                unsigned int*
+            );
+        using GetFanSpeedFn =
+            nvmlReturn_t (*)(
+                nvmlDevice_t,
+                unsigned int*
+            );
+        using GetPowerUsageFn =
+            nvmlReturn_t (*)(
+                nvmlDevice_t,
+                unsigned int*
+            );
+        using GetPowerLimitFn =
+            nvmlReturn_t (*)(
+                nvmlDevice_t,
+                unsigned int*
+            );
+        using GetUtilizationFn =
+            nvmlReturn_t (*)(
+                nvmlDevice_t,
+                NvmlUtilization*
+            );
+        using GetMemoryFn =
+            nvmlReturn_t (*)(
+                nvmlDevice_t,
+                NvmlMemory*
+            );
+        using GetCodecUtilizationFn =
+            nvmlReturn_t (*)(
+                nvmlDevice_t,
+                unsigned int*,
+                unsigned int*
+            );
+        using GetPcieValueFn =
+            nvmlReturn_t (*)(
+                nvmlDevice_t,
+                unsigned int*
+            );
+        using GetNumCoresFn =
+            nvmlReturn_t (*)(
+                nvmlDevice_t,
+                unsigned int*
+            );
+        using GetDriverVersionFn =
+            nvmlReturn_t (*)(
+                char*,
+                unsigned int
+            );
+
+        HMODULE module = nullptr;
+        bool initialized = false;
+
+        InitFn init = nullptr;
+        GetCountFn getCount = nullptr;
+        GetHandleFn getHandle = nullptr;
+        GetNameFn getName = nullptr;
+        GetTemperatureFn getTemperature = nullptr;
+        GetFanSpeedFn getFanSpeed = nullptr;
+        GetPowerUsageFn getPowerUsage = nullptr;
+        GetPowerLimitFn getPowerLimit = nullptr;
+        GetUtilizationFn getUtilization = nullptr;
+        GetMemoryFn getMemory = nullptr;
+        GetCodecUtilizationFn getEncoderUtilization = nullptr;
+        GetCodecUtilizationFn getDecoderUtilization = nullptr;
+        GetPcieValueFn getPcieGeneration = nullptr;
+        GetPcieValueFn getPcieWidth = nullptr;
+        GetNumCoresFn getNumCores = nullptr;
+        GetDriverVersionFn getDriverVersion = nullptr;
+
+        bool valid() const
+        {
+            return
+                initialized &&
+                getCount != nullptr &&
+                getHandle != nullptr &&
+                getName != nullptr;
+        }
+    };
+
+
+    FARPROC nvmlProc(
+        HMODULE module,
+        const char* name)
+    {
+        return module != nullptr
+            ? GetProcAddress(module, name)
+            : nullptr;
+    }
+
+
+    NvmlFunctions& getNvmlFunctions()
+    {
+        static NvmlFunctions nvml;
+        static bool attempted = false;
+
+        if (attempted)
+        {
+            return nvml;
+        }
+
+        attempted = true;
+        nvml.module =
+            LoadLibraryA("nvml.dll");
+
+        if (nvml.module == nullptr)
+        {
+            const char* programFiles =
+                std::getenv("ProgramW6432");
+
+            if (programFiles == nullptr)
+            {
+                programFiles =
+                    std::getenv("ProgramFiles");
+            }
+
+            if (programFiles != nullptr)
+            {
+                std::string path =
+                    std::string(programFiles) +
+                    "\\NVIDIA Corporation\\NVSMI\\nvml.dll";
+
+                nvml.module =
+                    LoadLibraryA(path.c_str());
+            }
+        }
+
+        if (nvml.module == nullptr)
+        {
+            return nvml;
+        }
+
+        nvml.init =
+            reinterpret_cast<NvmlFunctions::InitFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlInit_v2"
+                )
+            );
+        nvml.getCount =
+            reinterpret_cast<NvmlFunctions::GetCountFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetCount_v2"
+                )
+            );
+        nvml.getHandle =
+            reinterpret_cast<NvmlFunctions::GetHandleFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetHandleByIndex_v2"
+                )
+            );
+        nvml.getName =
+            reinterpret_cast<NvmlFunctions::GetNameFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetName"
+                )
+            );
+        nvml.getTemperature =
+            reinterpret_cast<NvmlFunctions::GetTemperatureFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetTemperature"
+                )
+            );
+        nvml.getFanSpeed =
+            reinterpret_cast<NvmlFunctions::GetFanSpeedFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetFanSpeed"
+                )
+            );
+        nvml.getPowerUsage =
+            reinterpret_cast<NvmlFunctions::GetPowerUsageFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetPowerUsage"
+                )
+            );
+        nvml.getPowerLimit =
+            reinterpret_cast<NvmlFunctions::GetPowerLimitFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetPowerManagementLimit"
+                )
+            );
+        nvml.getUtilization =
+            reinterpret_cast<NvmlFunctions::GetUtilizationFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetUtilizationRates"
+                )
+            );
+        nvml.getMemory =
+            reinterpret_cast<NvmlFunctions::GetMemoryFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetMemoryInfo"
+                )
+            );
+        nvml.getEncoderUtilization =
+            reinterpret_cast<NvmlFunctions::GetCodecUtilizationFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetEncoderUtilization"
+                )
+            );
+        nvml.getDecoderUtilization =
+            reinterpret_cast<NvmlFunctions::GetCodecUtilizationFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetDecoderUtilization"
+                )
+            );
+        nvml.getPcieGeneration =
+            reinterpret_cast<NvmlFunctions::GetPcieValueFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetCurrPcieLinkGeneration"
+                )
+            );
+        nvml.getPcieWidth =
+            reinterpret_cast<NvmlFunctions::GetPcieValueFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetCurrPcieLinkWidth"
+                )
+            );
+        nvml.getNumCores =
+            reinterpret_cast<NvmlFunctions::GetNumCoresFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetNumGpuCores"
+                )
+            );
+        nvml.getDriverVersion =
+            reinterpret_cast<NvmlFunctions::GetDriverVersionFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlSystemGetDriverVersion"
+                )
+            );
+
+        if (
+            nvml.init != nullptr &&
+            nvml.init() == 0
+        )
+        {
+            nvml.initialized = true;
+        }
+
+        return nvml;
+    }
+
+
+    bool gpuNamesMatch(
+        const std::string& left,
+        const std::string& right)
+    {
+        std::string a = toUpperCopy(left);
+        std::string b = toUpperCopy(right);
+
+        return
+            a == b ||
+            a.find(b) != std::string::npos ||
+            b.find(a) != std::string::npos;
+    }
+
+
+    void enrichGpuWithNvml()
+    {
+        NvmlFunctions& nvml =
+            getNvmlFunctions();
+
+        if (!nvml.valid())
+        {
+            return;
+        }
+
+        unsigned int count = 0;
+
+        if (nvml.getCount(&count) != 0 ||
+            count == 0)
+        {
+            return;
+        }
+
+        struct NvmlDeviceEntry
+        {
+            nvmlDevice_t handle = nullptr;
+            std::string name;
+            bool used = false;
+        };
+
+        std::vector<NvmlDeviceEntry> devices;
+
+        for (unsigned int index = 0;
+             index < count;
+             index++)
+        {
+            nvmlDevice_t handle = nullptr;
+
+            if (nvml.getHandle(
+                    index,
+                    &handle
+                ) != 0 ||
+                handle == nullptr)
+            {
+                continue;
+            }
+
+            char name[128] = {};
+            nvml.getName(
+                handle,
+                name,
+                sizeof(name)
+            );
+
+            NvmlDeviceEntry entry;
+            entry.handle = handle;
+            entry.name = trimText(name);
+            devices.push_back(entry);
+        }
+
+        char globalDriver[96] = {};
+        std::string globalDriverVersion;
+
+        if (
+            nvml.getDriverVersion != nullptr &&
+            nvml.getDriverVersion(
+                globalDriver,
+                sizeof(globalDriver)
+            ) == 0
+        )
+        {
+            globalDriverVersion =
+                trimText(globalDriver);
+        }
+
+        for (GpuStats& gpu : gpuStats)
+        {
+            if (gpu.vendor != "NVIDIA")
+            {
+                continue;
+            }
+
+            int match = -1;
+
+            for (size_t index = 0;
+                 index < devices.size();
+                 index++)
+            {
+                if (
+                    !devices[index].used &&
+                    gpuNamesMatch(
+                        gpu.name,
+                        devices[index].name
+                    )
+                )
+                {
+                    match =
+                        static_cast<int>(index);
+                    break;
+                }
+            }
+
+            if (match < 0)
+            {
+                for (size_t index = 0;
+                     index < devices.size();
+                     index++)
+                {
+                    if (!devices[index].used)
+                    {
+                        match =
+                            static_cast<int>(index);
+                        break;
+                    }
+                }
+            }
+
+            if (match < 0)
+            {
+                continue;
+            }
+
+            devices[match].used = true;
+            nvmlDevice_t device =
+                devices[match].handle;
+
+            unsigned int value = 0;
+
+            if (
+                nvml.getTemperature != nullptr &&
+                nvml.getTemperature(
+                    device,
+                    0,
+                    &value
+                ) == 0
+            )
+            {
+                gpu.temperatureC =
+                    static_cast<double>(value);
+            }
+
+            value = 0;
+            if (
+                nvml.getFanSpeed != nullptr &&
+                nvml.getFanSpeed(
+                    device,
+                    &value
+                ) == 0
+            )
+            {
+                gpu.fanPercent =
+                    static_cast<int>(value);
+            }
+
+            value = 0;
+            if (
+                nvml.getPowerUsage != nullptr &&
+                nvml.getPowerUsage(
+                    device,
+                    &value
+                ) == 0
+            )
+            {
+                gpu.powerW =
+                    value / 1000.0;
+            }
+
+            value = 0;
+            if (
+                nvml.getPowerLimit != nullptr &&
+                nvml.getPowerLimit(
+                    device,
+                    &value
+                ) == 0
+            )
+            {
+                gpu.powerLimitW =
+                    value / 1000.0;
+            }
+
+            NvmlUtilization utilization = {};
+            if (
+                nvml.getUtilization != nullptr &&
+                nvml.getUtilization(
+                    device,
+                    &utilization
+                ) == 0 &&
+                !gpu.performanceValid
+            )
+            {
+                gpu.utilizationPercent =
+                    static_cast<double>(
+                        utilization.gpu
+                    );
+                gpu.performanceValid = true;
+            }
+
+            NvmlMemory memoryInfo = {};
+            if (
+                nvml.getMemory != nullptr &&
+                nvml.getMemory(
+                    device,
+                    &memoryInfo
+                ) == 0
+            )
+            {
+                if (
+                    gpu.dedicatedMemoryTotalBytes == 0
+                )
+                {
+                    gpu.dedicatedMemoryTotalBytes =
+                        memoryInfo.total;
+                }
+
+                if (
+                    gpu.dedicatedMemoryUsedBytes == 0
+                )
+                {
+                    gpu.dedicatedMemoryUsedBytes =
+                        memoryInfo.used;
+                }
+            }
+
+            unsigned int utilizationValue = 0;
+            unsigned int samplingPeriod = 0;
+
+            if (
+                nvml.getEncoderUtilization != nullptr &&
+                nvml.getEncoderUtilization(
+                    device,
+                    &utilizationValue,
+                    &samplingPeriod
+                ) == 0 &&
+                gpu.encodePercent <= 0.0
+            )
+            {
+                gpu.encodePercent =
+                    static_cast<double>(
+                        utilizationValue
+                    );
+            }
+
+            utilizationValue = 0;
+            samplingPeriod = 0;
+
+            if (
+                nvml.getDecoderUtilization != nullptr &&
+                nvml.getDecoderUtilization(
+                    device,
+                    &utilizationValue,
+                    &samplingPeriod
+                ) == 0 &&
+                gpu.decodePercent <= 0.0
+            )
+            {
+                gpu.decodePercent =
+                    static_cast<double>(
+                        utilizationValue
+                    );
+            }
+
+            unsigned int generation = 0;
+            unsigned int width = 0;
+
+            if (
+                nvml.getPcieGeneration != nullptr &&
+                nvml.getPcieWidth != nullptr &&
+                nvml.getPcieGeneration(
+                    device,
+                    &generation
+                ) == 0 &&
+                nvml.getPcieWidth(
+                    device,
+                    &width
+                ) == 0 &&
+                generation > 0 &&
+                width > 0
+            )
+            {
+                gpu.busInterface =
+                    "PCIe " +
+                    std::to_string(generation) +
+                    ".0 x" +
+                    std::to_string(width);
+            }
+
+            unsigned int cores = 0;
+
+            if (
+                nvml.getNumCores != nullptr &&
+                nvml.getNumCores(
+                    device,
+                    &cores
+                ) == 0 &&
+                cores > 0
+            )
+            {
+                gpu.computeCores =
+                    std::to_string(cores);
+            }
+
+            if (
+                (gpu.driverVersion.empty() ||
+                 gpu.driverVersion == "--") &&
+                !globalDriverVersion.empty()
+            )
+            {
+                gpu.driverVersion =
+                    globalDriverVersion;
+            }
+        }
+    }
+
+
+    void sampleGpuHistories()
+    {
+        for (GpuStats& gpu : gpuStats)
+        {
+            pushGpuHistory(
+                gpu.utilizationHistory,
+                gpu.utilizationPercent
+            );
+
+            pushGpuHistory(
+                gpu.dedicatedMemoryHistory,
+                gpu.dedicatedMemoryUsedBytes /
+                    bytesPerGB
+            );
+
+            pushGpuHistory(
+                gpu.sharedMemoryHistory,
+                gpu.sharedMemoryUsedBytes /
+                    bytesPerGB
+            );
+
+            pushGpuHistory(
+                gpu.encodeHistory,
+                gpu.encodePercent
+            );
+
+            pushGpuHistory(
+                gpu.decodeHistory,
+                gpu.decodePercent
+            );
+        }
+    }
+
+
     std::string wideToAnsi(
         const wchar_t* text)
     {
@@ -3632,6 +5182,42 @@ namespace
 }
 
 
+void refreshGpuStats(bool force)
+{
+    ULONGLONG now =
+        GetTickCount64();
+
+    if (
+        force ||
+        lastGpuEnumerationTick == 0 ||
+        now - lastGpuEnumerationTick >= 5000
+    )
+    {
+        enumerateGpuAdapters();
+        lastGpuEnumerationTick = now;
+    }
+
+    for (GpuStats& gpu : gpuStats)
+    {
+        gpu.performanceValid = false;
+        gpu.utilizationPercent = 0.0;
+        gpu.encodePercent = 0.0;
+        gpu.decodePercent = 0.0;
+        gpu.dedicatedMemoryUsedBytes = 0;
+        gpu.sharedMemoryUsedBytes = 0;
+        gpu.temperatureC = -1.0;
+        gpu.fanPercent = -1;
+        gpu.fanRpm = -1;
+        gpu.powerW = -1.0;
+        gpu.powerLimitW = -1.0;
+    }
+
+    updateGpuPdhMetrics();
+    enrichGpuWithNvml();
+    sampleGpuHistories();
+}
+
+
 void refreshSystemInfo(bool force)
 {
     ULONGLONG now =
@@ -3859,6 +5445,10 @@ void updateStats()
 
     // Physical-disk activity, transfer rate and metadata.
     updateDiskPerformance();
+
+
+    // GPU performance and hot-plug detection.
+    refreshGpuStats(false);
 
 
     // System / hardware overview and connected-device refresh.

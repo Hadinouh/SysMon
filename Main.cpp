@@ -28,6 +28,7 @@ bool processSortDescending =
     PerformanceView performanceView =
     PerformanceView::CPU;
     int selectedDiskIndex = 0;
+    int selectedGpuIndex = 0;
     int systemInfoScrollOffset = 0;
     int systemInfoMaxScrollOffset = 0;
     std::string selectedConnectedDeviceKey = "";
@@ -575,33 +576,59 @@ if (
         }
     }
 
-    int gpuTop =
-        performanceGpuCardTop(
-            diskStats.size()
+    int gpuCardCount =
+        performanceVisibleGpuCardCount(
+            gpuStats.size()
         );
 
-    if (
-        mouseY >= gpuTop &&
-        mouseY <=
-            gpuTop +
-            performanceDiskCardHeight
-    )
+    for (int index = 0;
+         index < gpuCardCount;
+         index++)
     {
-        performanceView =
-            PerformanceView::GPU;
+        int gpuTop =
+            performanceGpuCardTop(
+                diskStats.size(),
+                index
+            );
 
-        InvalidateRect(
-            hwnd,
-            nullptr,
-            FALSE
-        );
+        if (
+            mouseY >= gpuTop &&
+            mouseY <=
+                gpuTop +
+                performanceDiskCardHeight
+        )
+        {
+            performanceView =
+                PerformanceView::GPU;
 
-        return 0;
+            if (
+                index <
+                static_cast<int>(
+                    gpuStats.size()
+                )
+            )
+            {
+                selectedGpuIndex = index;
+            }
+            else
+            {
+                selectedGpuIndex = 0;
+            }
+
+            InvalidateRect(
+                hwnd,
+                nullptr,
+                FALSE
+            );
+
+            return 0;
+        }
     }
 
     int networkTop =
         performanceNetworkCardTop(
-            diskStats.size()
+            diskStats.size(),
+            gpuStats.size()
         );
 
     if (
@@ -1309,8 +1336,12 @@ case WM_DEVICECHANGE:
     // Refresh the About PC connected-device / network data
     // immediately when Windows reports a hardware change.
     refreshSystemInfo(true);
+    refreshGpuStats(true);
 
-    if (currentPage == AppPage::SystemInfo)
+    if (
+        currentPage == AppPage::SystemInfo ||
+        currentPage == AppPage::Performance
+    )
     {
         InvalidateRect(
             hwnd,
@@ -1337,6 +1368,16 @@ case WM_TIMER:
         )
         {
             selectedDiskIndex = 0;
+        }
+
+        if (
+            selectedGpuIndex >=
+                static_cast<int>(
+                    gpuStats.size()
+                )
+        )
+        {
+            selectedGpuIndex = 0;
         }
 
         // Refresh the main dashboard if it is open

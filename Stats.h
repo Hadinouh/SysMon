@@ -31,6 +31,45 @@ struct DiskStats
 };
 
 
+struct GpuStats
+{
+    int index = 0;
+    int physicalIndex = 0;
+    std::string stableId;
+    std::string name = "--";
+    std::string vendor = "--";
+
+    bool performanceValid = false;
+    double utilizationPercent = 0.0;
+    double encodePercent = 0.0;
+    double decodePercent = 0.0;
+
+    unsigned long long dedicatedMemoryUsedBytes = 0;
+    unsigned long long dedicatedMemoryTotalBytes = 0;
+    unsigned long long sharedMemoryUsedBytes = 0;
+    unsigned long long sharedMemoryTotalBytes = 0;
+
+    double temperatureC = -1.0;
+    int fanPercent = -1;
+    int fanRpm = -1;
+    double powerW = -1.0;
+    double powerLimitW = -1.0;
+
+    std::string driverVersion = "--";
+    std::string driverDate = "--";
+    std::string directXVersion = "--";
+    std::string busInterface = "--";
+    std::string computeCores = "--";
+    std::string hardwareReservedMemory = "--";
+
+    std::vector<double> utilizationHistory;
+    std::vector<double> dedicatedMemoryHistory;
+    std::vector<double> sharedMemoryHistory;
+    std::vector<double> encodeHistory;
+    std::vector<double> decodeHistory;
+};
+
+
 struct ConnectedDeviceInfo
 {
     std::string name = "--";
@@ -120,6 +159,7 @@ extern double totalDiskGB;
 extern int diskPercent;
 
 extern std::vector<DiskStats> diskStats;
+extern std::vector<GpuStats> gpuStats;
 extern SystemInfoData systemInfo;
 
 extern ULONGLONG uptimeSeconds;
@@ -133,3 +173,4 @@ void updateStats();
 void addCpuHistorySample();
 void addRamHistorySample();
 void refreshSystemInfo(bool force = false);
+void refreshGpuStats(bool force = false);

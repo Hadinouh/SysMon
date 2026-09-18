@@ -1760,7 +1760,7 @@ drawText(
 POINT oldOrigin;
 drawText(
     hdc,
-    "v0.8",
+    "v0.9-dev",
     55,
     660,
     RGB(100, 108, 122),
@@ -3697,7 +3697,7 @@ else if (currentPage == AppPage::SystemInfo)
 
     drawText(
         hdc,
-        "Version 0.8-dev",
+        "Version 0.9-dev",
         leftX + 90,
         aboutTop + 49,
         textSecondary,
@@ -3821,6 +3821,27 @@ else if (currentPage == AppPage::Performance)
 
     const COLORREF networkOrange =
         RGB(220, 140, 55);
+
+
+    auto shortenPerformanceText =
+        [](const std::string& value,
+           size_t maximum)
+        -> std::string
+    {
+        if (value.size() <= maximum)
+        {
+            return value;
+        }
+
+        if (maximum <= 3)
+        {
+            return value.substr(0, maximum);
+        }
+
+        return
+            value.substr(0, maximum - 3) +
+            "...";
+    };
 
 
     // --------------------------------------------------------
@@ -4485,70 +4506,155 @@ else if (currentPage == AppPage::Performance)
     }
 
 
-    // GPU
-    int gpuTop =
-        performanceGpuCardTop(
-            diskStats.size()
+    // GPU adapters - one resource card per detected GPU.
+    int gpuCardCount =
+        performanceVisibleGpuCardCount(
+            gpuStats.size()
         );
 
-    drawResourceCard(
-        gpuTop,
-        gpuTop +
-            performanceDiskCardHeight,
-        gpuPurple,
-        performanceView ==
-            PerformanceView::GPU
-    );
+    for (int index = 0;
+         index < gpuCardCount;
+         index++)
+    {
+        int gpuTop =
+            performanceGpuCardTop(
+                diskStats.size(),
+                index
+            );
 
-    drawRoundedBox(
-        hdc,
-        65,
-        gpuTop + 10,
-        123,
-        gpuTop + 58,
-        RGB(20, 24, 30)
-    );
+        bool hasGpu =
+            index <
+            static_cast<int>(
+                gpuStats.size()
+            );
 
-    drawGraphGrid(
-        hdc,
-        65,
-        gpuTop + 10,
-        58,
-        48
-    );
+        bool selected =
+            performanceView ==
+                PerformanceView::GPU &&
+            selectedGpuIndex == index;
 
-    drawText(
-        hdc,
-        "--",
-        86,
-        gpuTop + 25,
-        gpuPurple,
-        labelFont
-    );
+        drawResourceCard(
+            gpuTop,
+            gpuTop +
+                performanceDiskCardHeight,
+            gpuPurple,
+            selected
+        );
 
-    drawText(
-        hdc,
-        "GPU",
-        135,
-        gpuTop + 10,
-        textPrimary,
-        labelFont
-    );
+        if (hasGpu)
+        {
+            const GpuStats& gpu =
+                gpuStats[index];
 
-    drawText(
-        hdc,
-        "PLANNED",
-        135,
-        gpuTop + 37,
-        textSecondary,
-        smallFont
-    );
+            drawDiskHistoryGraph(
+                hdc,
+                65,
+                gpuTop + 10,
+                58,
+                48,
+                gpu.utilizationHistory,
+                100.0,
+                gpuPurple,
+                RGB(48, 28, 70)
+            );
+
+            std::string gpuLabel =
+                gpuStats.size() > 1
+                ? "GPU " +
+                    std::to_string(index)
+                : "GPU";
+
+            drawText(
+                hdc,
+                gpuLabel,
+                135,
+                gpuTop + 7,
+                textPrimary,
+                labelFont
+            );
+
+            std::ostringstream gpuUsageText;
+            gpuUsageText
+                << std::fixed
+                << std::setprecision(0)
+                << gpu.utilizationPercent
+                << "%";
+
+            drawText(
+                hdc,
+                gpuUsageText.str(),
+                135,
+                gpuTop + 31,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                shortenPerformanceText(
+                    gpu.name,
+                    19
+                ),
+                135,
+                gpuTop + 49,
+                textSecondary,
+                smallFont
+            );
+        }
+        else
+        {
+            drawRoundedBox(
+                hdc,
+                65,
+                gpuTop + 10,
+                123,
+                gpuTop + 58,
+                RGB(20, 24, 30)
+            );
+
+            drawGraphGrid(
+                hdc,
+                65,
+                gpuTop + 10,
+                58,
+                48
+            );
+
+            drawText(
+                hdc,
+                "--",
+                86,
+                gpuTop + 25,
+                gpuPurple,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "GPU",
+                135,
+                gpuTop + 10,
+                textPrimary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "No GPU detected",
+                135,
+                gpuTop + 37,
+                textSecondary,
+                smallFont
+            );
+        }
+    }
 
 
     // Network
     int networkTop =
         performanceNetworkCardTop(
-            diskStats.size()
+            diskStats.size(),
+            gpuStats.size()
         );
 
     drawResourceCard(
@@ -4603,7 +4709,6 @@ else if (currentPage == AppPage::Performance)
         textSecondary,
         smallFont
     );
-
 
     // --------------------------------------------------------
     // CPU VIEW
@@ -6697,7 +6802,630 @@ else if (currentPage == AppPage::Performance)
 
 
     // --------------------------------------------------------
-    // GPU / NETWORK PLACEHOLDER VIEWS
+    // GPU VIEW
+    // --------------------------------------------------------
+    else if (
+        performanceView ==
+        PerformanceView::GPU
+    )
+    {
+        drawRoundedBox(
+            hdc,
+            255,
+            115,
+            915,
+            680,
+            performanceCard
+        );
+
+        if (gpuStats.empty())
+        {
+            drawText(
+                hdc,
+                "GPU",
+                280,
+                135,
+                textPrimary,
+                titleFont
+            );
+
+            drawText(
+                hdc,
+                "No compatible Windows GPU adapter was detected.",
+                280,
+                200,
+                textSecondary,
+                labelFont
+            );
+        }
+        else
+        {
+            if (
+                selectedGpuIndex < 0 ||
+                selectedGpuIndex >=
+                    static_cast<int>(
+                        gpuStats.size()
+                    )
+            )
+            {
+                selectedGpuIndex = 0;
+            }
+
+            const GpuStats& gpu =
+                gpuStats[selectedGpuIndex];
+
+            const double bytesPerGpuGB =
+                1024.0 * 1024.0 * 1024.0;
+
+            auto formatGpuMemory =
+                [&](unsigned long long used,
+                    unsigned long long total)
+                -> std::string
+            {
+                std::ostringstream stream;
+
+                if (total == 0)
+                {
+                    return "--";
+                }
+
+                stream
+                    << std::fixed
+                    << std::setprecision(1)
+                    << (used / bytesPerGpuGB)
+                    << " / "
+                    << (total / bytesPerGpuGB)
+                    << " GB";
+
+                return stream.str();
+            };
+
+            auto percentText =
+                [](double value)
+                -> std::string
+            {
+                std::ostringstream stream;
+                stream
+                    << std::fixed
+                    << std::setprecision(0)
+                    << value
+                    << "%";
+                return stream.str();
+            };
+
+            auto drawSmallGpuGraph =
+                [&](int x,
+                    int y,
+                    int width,
+                    int height,
+                    const std::vector<double>& history,
+                    double maximum)
+            {
+                if (maximum <= 0.0)
+                {
+                    maximum = 1.0;
+                }
+
+                drawDiskHistoryGraph(
+                    hdc,
+                    x,
+                    y,
+                    width,
+                    height,
+                    history,
+                    maximum,
+                    gpuPurple,
+                    RGB(48, 28, 70)
+                );
+            };
+
+            drawText(
+                hdc,
+                gpuStats.size() > 1
+                    ? "GPU " +
+                        std::to_string(
+                            selectedGpuIndex
+                        )
+                    : "GPU",
+                280,
+                128,
+                textPrimary,
+                titleFont
+            );
+
+            std::string displayGpuName =
+                shortenPerformanceText(
+                    gpu.name,
+                    44
+                );
+
+            SIZE gpuNameExtent = {};
+            setFont(hdc, labelFont);
+
+            GetTextExtentPoint32A(
+                hdc,
+                displayGpuName.c_str(),
+                static_cast<int>(
+                    displayGpuName.size()
+                ),
+                &gpuNameExtent
+            );
+
+            int gpuNameX =
+                890 - gpuNameExtent.cx;
+
+            if (gpuNameX < 560)
+            {
+                gpuNameX = 560;
+            }
+
+            drawText(
+                hdc,
+                displayGpuName,
+                gpuNameX,
+                140,
+                textSecondary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "3D",
+                280,
+                168,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                percentText(
+                    gpu.utilizationPercent
+                ),
+                850,
+                168,
+                textSecondary,
+                smallFont
+            );
+
+            drawSmallGpuGraph(
+                280,
+                187,
+                610,
+                118,
+                gpu.utilizationHistory,
+                100.0
+            );
+
+            drawText(
+                hdc,
+                "60 seconds",
+                280,
+                308,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "0",
+                882,
+                308,
+                textSecondary,
+                smallFont
+            );
+
+            double dedicatedTotalGB =
+                gpu.dedicatedMemoryTotalBytes /
+                bytesPerGpuGB;
+
+            double sharedTotalGB =
+                gpu.sharedMemoryTotalBytes /
+                bytesPerGpuGB;
+
+            drawText(
+                hdc,
+                "Dedicated GPU memory usage",
+                280,
+                335,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                formatGpuMemory(
+                    gpu.dedicatedMemoryUsedBytes,
+                    gpu.dedicatedMemoryTotalBytes
+                ),
+                438,
+                335,
+                textSecondary,
+                smallFont
+            );
+
+            drawSmallGpuGraph(
+                280,
+                354,
+                290,
+                60,
+                gpu.dedicatedMemoryHistory,
+                dedicatedTotalGB
+            );
+
+            drawText(
+                hdc,
+                "Shared GPU memory usage",
+                600,
+                335,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                formatGpuMemory(
+                    gpu.sharedMemoryUsedBytes,
+                    gpu.sharedMemoryTotalBytes
+                ),
+                748,
+                335,
+                textSecondary,
+                smallFont
+            );
+
+            drawSmallGpuGraph(
+                600,
+                354,
+                290,
+                60,
+                gpu.sharedMemoryHistory,
+                sharedTotalGB
+            );
+
+            drawText(
+                hdc,
+                "Video Encode",
+                280,
+                430,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                percentText(
+                    gpu.encodePercent
+                ),
+                535,
+                430,
+                textSecondary,
+                smallFont
+            );
+
+            drawSmallGpuGraph(
+                280,
+                449,
+                290,
+                50,
+                gpu.encodeHistory,
+                100.0
+            );
+
+            drawText(
+                hdc,
+                "Video Decode",
+                600,
+                430,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                percentText(
+                    gpu.decodePercent
+                ),
+                855,
+                430,
+                textSecondary,
+                smallFont
+            );
+
+            drawSmallGpuGraph(
+                600,
+                449,
+                290,
+                50,
+                gpu.decodeHistory,
+                100.0
+            );
+
+            // Bottom live values.
+            drawText(
+                hdc,
+                "Utilization",
+                280,
+                520,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                percentText(
+                    gpu.utilizationPercent
+                ),
+                280,
+                540,
+                textPrimary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "Dedicated GPU memory",
+                390,
+                520,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                formatGpuMemory(
+                    gpu.dedicatedMemoryUsedBytes,
+                    gpu.dedicatedMemoryTotalBytes
+                ),
+                390,
+                540,
+                textPrimary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "Shared GPU memory",
+                535,
+                520,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                formatGpuMemory(
+                    gpu.sharedMemoryUsedBytes,
+                    gpu.sharedMemoryTotalBytes
+                ),
+                535,
+                540,
+                textPrimary,
+                smallFont
+            );
+
+            std::string temperatureText = "--";
+            if (gpu.temperatureC >= 0.0)
+            {
+                std::ostringstream stream;
+                stream
+                    << std::fixed
+                    << std::setprecision(0)
+                    << gpu.temperatureC
+                    << " C";
+                temperatureText = stream.str();
+            }
+
+            std::string fanText = "--";
+            if (gpu.fanPercent >= 0)
+            {
+                fanText =
+                    std::to_string(
+                        gpu.fanPercent
+                    ) +
+                    "%";
+
+                if (gpu.fanRpm >= 0)
+                {
+                    fanText +=
+                        " (" +
+                        std::to_string(
+                            gpu.fanRpm
+                        ) +
+                        " RPM)";
+                }
+            }
+
+            std::string powerText = "--";
+            if (gpu.powerW >= 0.0)
+            {
+                std::ostringstream stream;
+                stream
+                    << std::fixed
+                    << std::setprecision(0)
+                    << gpu.powerW
+                    << " W";
+
+                if (gpu.powerLimitW > 0.0)
+                {
+                    stream
+                        << " / "
+                        << std::setprecision(0)
+                        << gpu.powerLimitW
+                        << " W";
+                }
+
+                powerText = stream.str();
+            }
+
+            drawText(
+                hdc,
+                "GPU temperature",
+                280,
+                585,
+                textSecondary,
+                smallFont
+            );
+            drawText(
+                hdc,
+                temperatureText,
+                280,
+                605,
+                textPrimary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "Fan speed",
+                390,
+                585,
+                textSecondary,
+                smallFont
+            );
+            drawText(
+                hdc,
+                fanText,
+                390,
+                605,
+                textPrimary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "GPU power",
+                535,
+                585,
+                textSecondary,
+                smallFont
+            );
+            drawText(
+                hdc,
+                powerText,
+                535,
+                605,
+                textPrimary,
+                labelFont
+            );
+
+            // Right-side technical details, matching the reference
+            // layout. Values that Windows/the vendor driver does not
+            // expose are deliberately shown as -- instead of guessed.
+            HPEN detailPen =
+                CreatePen(
+                    PS_SOLID,
+                    1,
+                    RGB(45, 48, 58)
+                );
+            HGDIOBJ oldDetailPen =
+                SelectObject(
+                    hdc,
+                    detailPen
+                );
+            MoveToEx(
+                hdc,
+                665,
+                515,
+                nullptr
+            );
+            LineTo(
+                hdc,
+                665,
+                660
+            );
+            SelectObject(
+                hdc,
+                oldDetailPen
+            );
+            DeleteObject(detailPen);
+
+            const int detailLabelX = 680;
+            const int detailValueX = 790;
+            int detailY = 520;
+            const int detailGap = 20;
+
+            auto drawGpuDetail =
+                [&](const std::string& label,
+                    const std::string& value)
+            {
+                drawText(
+                    hdc,
+                    label,
+                    detailLabelX,
+                    detailY,
+                    textSecondary,
+                    smallFont
+                );
+
+                drawText(
+                    hdc,
+                    shortenPerformanceText(
+                        value.empty()
+                            ? "--"
+                            : value,
+                        18
+                    ),
+                    detailValueX,
+                    detailY,
+                    textPrimary,
+                    smallFont
+                );
+
+                detailY += detailGap;
+            };
+
+            drawGpuDetail(
+                "Driver version:",
+                gpu.driverVersion
+            );
+            drawGpuDetail(
+                "Driver date:",
+                gpu.driverDate
+            );
+            drawGpuDetail(
+                "DirectX version:",
+                gpu.directXVersion
+            );
+            drawGpuDetail(
+                gpu.vendor == "NVIDIA"
+                    ? "CUDA cores:"
+                    : "Compute cores:",
+                gpu.computeCores
+            );
+
+            std::ostringstream graphicsMemory;
+            if (gpu.dedicatedMemoryTotalBytes > 0)
+            {
+                graphicsMemory
+                    << std::fixed
+                    << std::setprecision(1)
+                    << dedicatedTotalGB
+                    << " GB";
+            }
+            else
+            {
+                graphicsMemory << "--";
+            }
+
+            drawGpuDetail(
+                "Graphics memory:",
+                graphicsMemory.str()
+            );
+            drawGpuDetail(
+                "Bus interface:",
+                gpu.busInterface
+            );
+            drawGpuDetail(
+                "HW reserved:",
+                gpu.hardwareReservedMemory
+            );
+        }
+    }
+
+
+    // --------------------------------------------------------
+    // NETWORK PLACEHOLDER VIEW
     // --------------------------------------------------------
     else
     {
@@ -6710,15 +7438,9 @@ else if (currentPage == AppPage::Performance)
             performanceCard
         );
 
-        std::string plannedTitle =
-            performanceView ==
-                PerformanceView::GPU
-            ? "GPU"
-            : "NETWORK";
-
         drawText(
             hdc,
-            plannedTitle,
+            "NETWORK",
             280,
             155,
             textPrimary,
@@ -6727,7 +7449,7 @@ else if (currentPage == AppPage::Performance)
 
         drawText(
             hdc,
-            "Monitoring support is planned for a later version.",
+            "Network performance monitoring is the next v0.9 component.",
             280,
             215,
             textSecondary,
