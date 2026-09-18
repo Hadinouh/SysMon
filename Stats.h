@@ -70,6 +70,46 @@ struct GpuStats
 };
 
 
+struct NetworkConnectionInfo
+{
+    DWORD pid = 0;
+    std::string processName = "--";
+    std::string remoteAddress = "--";
+    std::string state = "--";
+};
+
+
+struct NetworkStats
+{
+    int index = 0;
+    ULONG interfaceIndex = 0;
+    std::string stableId;
+    std::string name = "--";
+    std::string description = "--";
+    std::string type = "--";
+    std::string status = "--";
+    std::string ipv4Address = "--";
+    std::string ipv6Address = "--";
+    std::string macAddress = "--";
+    std::string defaultGateway = "--";
+    std::string dnsServers = "--";
+
+    bool performanceValid = false;
+    double linkSpeedMbps = 0.0;
+    double downloadMbps = 0.0;
+    double uploadMbps = 0.0;
+
+    unsigned long long totalDownloadedBytes = 0;
+    unsigned long long totalUploadedBytes = 0;
+    unsigned long long packetsSent = 0;
+    unsigned long long packetsReceived = 0;
+    ULONGLONG trackedSinceTick = 0;
+
+    std::vector<double> downloadHistory;
+    std::vector<double> uploadHistory;
+};
+
+
 struct ConnectedDeviceInfo
 {
     std::string name = "--";
@@ -160,6 +200,8 @@ extern int diskPercent;
 
 extern std::vector<DiskStats> diskStats;
 extern std::vector<GpuStats> gpuStats;
+extern std::vector<NetworkStats> networkStats;
+extern std::vector<NetworkConnectionInfo> activeNetworkConnections;
 extern SystemInfoData systemInfo;
 
 extern ULONGLONG uptimeSeconds;
@@ -174,3 +216,4 @@ void addCpuHistorySample();
 void addRamHistorySample();
 void refreshSystemInfo(bool force = false);
 void refreshGpuStats(bool force = false);
+void refreshNetworkStats(bool force = false);

@@ -37,6 +37,7 @@ enum class PerformanceView
 extern PerformanceView performanceView;
 extern int selectedDiskIndex;
 extern int selectedGpuIndex;
+extern int selectedNetworkIndex;
 extern int systemInfoScrollOffset;
 extern int systemInfoMaxScrollOffset;
 extern std::string selectedConnectedDeviceKey;

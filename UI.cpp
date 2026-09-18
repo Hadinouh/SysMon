@@ -1533,6 +1533,378 @@ static double getDiskTransferGraphScale(
 }
 
 
+static double getNetworkGraphScale(
+    const NetworkStats& adapter)
+{
+    double maximum =
+        (std::max)(
+            adapter.downloadMbps,
+            adapter.uploadMbps
+        );
+
+    for (double value :
+         adapter.downloadHistory)
+    {
+        maximum =
+            (std::max)(maximum, value);
+    }
+
+    for (double value :
+         adapter.uploadHistory)
+    {
+        maximum =
+            (std::max)(maximum, value);
+    }
+
+    const double scales[] =
+    {
+        1.0,
+        5.0,
+        10.0,
+        25.0,
+        50.0,
+        100.0,
+        250.0,
+        500.0,
+        1000.0,
+        2500.0,
+        5000.0,
+        10000.0
+    };
+
+    double target =
+        (std::max)(10.0, maximum * 1.15);
+
+    for (double scale : scales)
+    {
+        if (target <= scale)
+        {
+            return scale;
+        }
+    }
+
+    return target;
+}
+
+
+static std::string formatNetworkSpeed(
+    double megabitsPerSecond)
+{
+    std::ostringstream stream;
+
+    if (megabitsPerSecond >= 1000.0)
+    {
+        stream
+            << std::fixed
+            << std::setprecision(2)
+            << (megabitsPerSecond / 1000.0)
+            << " Gbps";
+    }
+    else
+    {
+        stream
+            << std::fixed
+            << std::setprecision(
+                megabitsPerSecond >= 10.0
+                ? 1
+                : 2
+            )
+            << megabitsPerSecond
+            << " Mbps";
+    }
+
+    return stream.str();
+}
+
+
+static std::string formatNetworkBytes(
+    unsigned long long bytes)
+{
+    std::ostringstream stream;
+
+    const double kb = 1024.0;
+    const double mb = kb * 1024.0;
+    const double gb = mb * 1024.0;
+    const double tb = gb * 1024.0;
+
+    if (bytes >=
+        static_cast<unsigned long long>(tb))
+    {
+        stream
+            << std::fixed
+            << std::setprecision(2)
+            << (bytes / tb)
+            << " TB";
+    }
+    else if (bytes >=
+             static_cast<unsigned long long>(gb))
+    {
+        stream
+            << std::fixed
+            << std::setprecision(2)
+            << (bytes / gb)
+            << " GB";
+    }
+    else if (bytes >=
+             static_cast<unsigned long long>(mb))
+    {
+        stream
+            << std::fixed
+            << std::setprecision(1)
+            << (bytes / mb)
+            << " MB";
+    }
+    else if (bytes >=
+             static_cast<unsigned long long>(kb))
+    {
+        stream
+            << std::fixed
+            << std::setprecision(1)
+            << (bytes / kb)
+            << " KB";
+    }
+    else
+    {
+        stream << bytes << " B";
+    }
+
+    return stream.str();
+}
+
+
+static std::string formatNetworkDuration(
+    ULONGLONG trackedSinceTick)
+{
+    if (trackedSinceTick == 0)
+    {
+        return "--";
+    }
+
+    ULONGLONG elapsed =
+        (
+            GetTickCount64() -
+            trackedSinceTick
+        ) / 1000;
+
+    ULONGLONG hours =
+        elapsed / 3600;
+    ULONGLONG minutes =
+        (elapsed % 3600) / 60;
+    ULONGLONG seconds =
+        elapsed % 60;
+
+    std::ostringstream stream;
+    stream
+        << std::setfill('0')
+        << std::setw(2)
+        << hours
+        << ":"
+        << std::setw(2)
+        << minutes
+        << ":"
+        << std::setw(2)
+        << seconds;
+
+    return stream.str();
+}
+
+
+static void drawNetworkHistoryGraph(
+    HDC hdc,
+    int x,
+    int y,
+    int width,
+    int height,
+    const NetworkStats& adapter,
+    double scaleMaximum,
+    COLORREF downloadColor,
+    COLORREF uploadColor)
+{
+    drawRoundedBox(
+        hdc,
+        x,
+        y,
+        x + width,
+        y + height,
+        RGB(20, 24, 30)
+    );
+
+    drawGraphGrid(
+        hdc,
+        x,
+        y,
+        width,
+        height
+    );
+
+    auto makePoints =
+        [&](const std::vector<double>& history)
+        -> std::vector<POINT>
+    {
+        std::vector<POINT> points;
+
+        if (history.size() < 2 ||
+            scaleMaximum <= 0.0)
+        {
+            return points;
+        }
+
+        points.resize(history.size());
+
+        for (size_t i = 0;
+             i < history.size();
+             i++)
+        {
+            double value =
+                std::clamp(
+                    history[i],
+                    0.0,
+                    scaleMaximum
+                );
+
+            points[i].x =
+                x +
+                static_cast<int>(
+                    i *
+                    static_cast<double>(width) /
+                    (history.size() - 1)
+                );
+
+            points[i].y =
+                y +
+                height -
+                static_cast<int>(
+                    (value / scaleMaximum) *
+                    height
+                );
+        }
+
+        return points;
+    };
+
+    std::vector<POINT> downloadPoints =
+        makePoints(
+            adapter.downloadHistory
+        );
+
+    std::vector<POINT> uploadPoints =
+        makePoints(
+            adapter.uploadHistory
+        );
+
+    if (!downloadPoints.empty())
+    {
+        std::vector<POINT> fillPoints =
+            downloadPoints;
+
+        fillPoints.push_back(
+            {
+                static_cast<LONG>(x + width),
+                static_cast<LONG>(y + height)
+            }
+        );
+        fillPoints.push_back(
+            {
+                static_cast<LONG>(x),
+                static_cast<LONG>(y + height)
+            }
+        );
+
+        HBRUSH fillBrush =
+            CreateSolidBrush(
+                RGB(74, 48, 20)
+            );
+        HGDIOBJ oldBrush =
+            SelectObject(
+                hdc,
+                fillBrush
+            );
+        HGDIOBJ oldFillPen =
+            SelectObject(
+                hdc,
+                GetStockObject(NULL_PEN)
+            );
+
+        Polygon(
+            hdc,
+            fillPoints.data(),
+            static_cast<int>(
+                fillPoints.size()
+            )
+        );
+
+        SelectObject(
+            hdc,
+            oldFillPen
+        );
+        SelectObject(
+            hdc,
+            oldBrush
+        );
+        DeleteObject(fillBrush);
+
+        drawGraphGrid(
+            hdc,
+            x,
+            y,
+            width,
+            height
+        );
+
+        HPEN pen =
+            CreatePen(
+                PS_SOLID,
+                2,
+                downloadColor
+            );
+        HGDIOBJ oldPen =
+            SelectObject(
+                hdc,
+                pen
+            );
+        Polyline(
+            hdc,
+            downloadPoints.data(),
+            static_cast<int>(
+                downloadPoints.size()
+            )
+        );
+        SelectObject(
+            hdc,
+            oldPen
+        );
+        DeleteObject(pen);
+    }
+
+    if (!uploadPoints.empty())
+    {
+        HPEN pen =
+            CreatePen(
+                PS_SOLID,
+                2,
+                uploadColor
+            );
+        HGDIOBJ oldPen =
+            SelectObject(
+                hdc,
+                pen
+            );
+        Polyline(
+            hdc,
+            uploadPoints.data(),
+            static_cast<int>(
+                uploadPoints.size()
+            )
+        );
+        SelectObject(
+            hdc,
+            oldPen
+        );
+        DeleteObject(pen);
+    }
+}
+
+
 static std::string formatDiskSpeed(
     double megabytesPerSecond)
 {
@@ -4666,49 +5038,122 @@ else if (currentPage == AppPage::Performance)
             PerformanceView::Network
     );
 
-    drawRoundedBox(
-        hdc,
-        65,
-        networkTop + 10,
-        123,
-        networkTop + 58,
-        RGB(20, 24, 30)
-    );
+    const NetworkStats* sidebarNetwork =
+        nullptr;
 
-    drawGraphGrid(
-        hdc,
-        65,
-        networkTop + 10,
-        58,
-        48
-    );
+    if (!networkStats.empty())
+    {
+        int sidebarIndex =
+            std::clamp(
+                selectedNetworkIndex,
+                0,
+                static_cast<int>(
+                    networkStats.size()
+                ) - 1
+            );
 
-    drawText(
-        hdc,
-        "--",
-        86,
-        networkTop + 25,
-        networkOrange,
-        labelFont
-    );
+        sidebarNetwork =
+            &networkStats[sidebarIndex];
+    }
 
-    drawText(
-        hdc,
-        "Network",
-        135,
-        networkTop + 10,
-        textPrimary,
-        labelFont
-    );
+    if (sidebarNetwork != nullptr)
+    {
+        double miniScale =
+            getNetworkGraphScale(
+                *sidebarNetwork
+            );
 
-    drawText(
-        hdc,
-        "PLANNED",
-        135,
-        networkTop + 37,
-        textSecondary,
-        smallFont
-    );
+        drawNetworkHistoryGraph(
+            hdc,
+            65,
+            networkTop + 10,
+            58,
+            48,
+            *sidebarNetwork,
+            miniScale,
+            networkOrange,
+            RGB(45, 145, 245)
+        );
+
+        drawText(
+            hdc,
+            "Network",
+            135,
+            networkTop + 7,
+            textPrimary,
+            labelFont
+        );
+
+        drawText(
+            hdc,
+            "R: " +
+                formatNetworkSpeed(
+                    sidebarNetwork->downloadMbps
+                ),
+            135,
+            networkTop + 30,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "S: " +
+                formatNetworkSpeed(
+                    sidebarNetwork->uploadMbps
+                ),
+            135,
+            networkTop + 48,
+            textSecondary,
+            smallFont
+        );
+    }
+    else
+    {
+        drawRoundedBox(
+            hdc,
+            65,
+            networkTop + 10,
+            123,
+            networkTop + 58,
+            RGB(20, 24, 30)
+        );
+
+        drawGraphGrid(
+            hdc,
+            65,
+            networkTop + 10,
+            58,
+            48
+        );
+
+        drawText(
+            hdc,
+            "--",
+            86,
+            networkTop + 25,
+            networkOrange,
+            labelFont
+        );
+
+        drawText(
+            hdc,
+            "Network",
+            135,
+            networkTop + 10,
+            textPrimary,
+            labelFont
+        );
+
+        drawText(
+            hdc,
+            "No active adapter",
+            135,
+            networkTop + 37,
+            textSecondary,
+            smallFont
+        );
+    }
 
     // --------------------------------------------------------
     // CPU VIEW
@@ -7425,16 +7870,16 @@ else if (currentPage == AppPage::Performance)
 
 
     // --------------------------------------------------------
-    // NETWORK PLACEHOLDER VIEW
+    // NETWORK VIEW
     // --------------------------------------------------------
     else
     {
         drawRoundedBox(
             hdc,
             255,
-            135,
-            890,
-            550,
+            115,
+            915,
+            665,
             performanceCard
         );
 
@@ -7442,19 +7887,585 @@ else if (currentPage == AppPage::Performance)
             hdc,
             "NETWORK",
             280,
-            155,
+            125,
             textPrimary,
             titleFont
         );
 
         drawText(
             hdc,
-            "Network performance monitoring is the next v0.9 component.",
+            "Live adapter throughput, addressing and connection details.",
             280,
-            215,
+            157,
             textSecondary,
-            labelFont
+            smallFont
         );
+
+        if (networkStats.empty())
+        {
+            drawText(
+                hdc,
+                "No active Ethernet, Wi-Fi, PPP, or tunnel adapter was detected.",
+                280,
+                215,
+                textSecondary,
+                labelFont
+            );
+        }
+        else
+        {
+            int networkIndex =
+                std::clamp(
+                    selectedNetworkIndex,
+                    0,
+                    static_cast<int>(
+                        networkStats.size()
+                    ) - 1
+                );
+
+            const NetworkStats& adapter =
+                networkStats[networkIndex];
+
+            const COLORREF uploadBlue =
+                RGB(45, 145, 245);
+
+            // ------------------------------------------------
+            // ADAPTER SELECTOR / SUMMARY
+            // ------------------------------------------------
+            drawRoundedBox(
+                hdc,
+                280,
+                180,
+                890,
+                240,
+                RGB(20, 24, 30)
+            );
+
+            drawText(
+                hdc,
+                adapter.type,
+                300,
+                190,
+                textPrimary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                shortenPerformanceText(
+                    adapter.description,
+                    34
+                ),
+                300,
+                214,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "Status",
+                565,
+                188,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                adapter.status,
+                565,
+                211,
+                textPrimary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "IPv4",
+                670,
+                188,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                shortenPerformanceText(
+                    adapter.ipv4Address,
+                    15
+                ),
+                670,
+                211,
+                textPrimary,
+                smallFont
+            );
+
+            std::string linkText =
+                adapter.linkSpeedMbps > 0.0
+                ? formatNetworkSpeed(
+                    adapter.linkSpeedMbps
+                  )
+                : "--";
+
+            drawText(
+                hdc,
+                "Link",
+                750,
+                188,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                linkText,
+                750,
+                211,
+                textPrimary,
+                smallFont
+            );
+
+            if (networkStats.size() > 1)
+            {
+                drawRoundedBox(
+                    hdc,
+                    835,
+                    186,
+                    858,
+                    215,
+                    RGB(36, 42, 54)
+                );
+                drawText(
+                    hdc,
+                    "<",
+                    843,
+                    191,
+                    textPrimary,
+                    labelFont
+                );
+
+                drawRoundedBox(
+                    hdc,
+                    862,
+                    186,
+                    885,
+                    215,
+                    RGB(36, 42, 54)
+                );
+                drawText(
+                    hdc,
+                    ">",
+                    870,
+                    191,
+                    textPrimary,
+                    labelFont
+                );
+
+                drawText(
+                    hdc,
+                    std::to_string(
+                        networkIndex + 1
+                    ) +
+                    " / " +
+                    std::to_string(
+                        networkStats.size()
+                    ),
+                    837,
+                    219,
+                    textSecondary,
+                    smallFont
+                );
+            }
+
+            // ------------------------------------------------
+            // NETWORK USAGE GRAPH
+            // ------------------------------------------------
+            drawRoundedBox(
+                hdc,
+                280,
+                255,
+                675,
+                485,
+                RGB(20, 24, 30)
+            );
+
+            drawText(
+                hdc,
+                "Network Usage",
+                300,
+                270,
+                textPrimary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "Download",
+                500,
+                271,
+                networkOrange,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "Upload",
+                590,
+                271,
+                uploadBlue,
+                smallFont
+            );
+
+            double networkScale =
+                getNetworkGraphScale(
+                    adapter
+                );
+
+            drawNetworkHistoryGraph(
+                hdc,
+                315,
+                305,
+                330,
+                135,
+                adapter,
+                networkScale,
+                networkOrange,
+                uploadBlue
+            );
+
+            std::ostringstream scaleTop;
+            scaleTop
+                << std::fixed
+                << std::setprecision(
+                    networkScale >= 10.0
+                    ? 0
+                    : 1
+                )
+                << networkScale
+                << " Mbps";
+
+            std::ostringstream scaleHalf;
+            scaleHalf
+                << std::fixed
+                << std::setprecision(
+                    networkScale >= 10.0
+                    ? 0
+                    : 1
+                )
+                << (networkScale / 2.0)
+                << " Mbps";
+
+            drawText(
+                hdc,
+                scaleTop.str(),
+                290,
+                299,
+                textSecondary,
+                smallFont
+            );
+            drawText(
+                hdc,
+                scaleHalf.str(),
+                290,
+                365,
+                textSecondary,
+                smallFont
+            );
+            drawText(
+                hdc,
+                "0",
+                300,
+                431,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "60 seconds",
+                315,
+                447,
+                textSecondary,
+                smallFont
+            );
+            drawText(
+                hdc,
+                "Now",
+                620,
+                447,
+                textSecondary,
+                smallFont
+            );
+
+            // ------------------------------------------------
+            // ADAPTER DETAILS
+            // ------------------------------------------------
+            drawRoundedBox(
+                hdc,
+                690,
+                255,
+                890,
+                450,
+                RGB(20, 24, 30)
+            );
+
+            drawText(
+                hdc,
+                "Adapter Details",
+                705,
+                270,
+                textPrimary,
+                labelFont
+            );
+
+            int detailY = 300;
+            const int detailGap = 20;
+
+            auto drawNetworkDetail =
+                [&](const std::string& label,
+                    const std::string& value)
+            {
+                drawText(
+                    hdc,
+                    label,
+                    705,
+                    detailY,
+                    textSecondary,
+                    smallFont
+                );
+
+                drawText(
+                    hdc,
+                    shortenPerformanceText(
+                        value.empty()
+                            ? "--"
+                            : value,
+                        19
+                    ),
+                    785,
+                    detailY,
+                    textPrimary,
+                    smallFont
+                );
+
+                detailY += detailGap;
+            };
+
+            drawNetworkDetail(
+                "Name:",
+                adapter.name
+            );
+            drawNetworkDetail(
+                "Type:",
+                adapter.type
+            );
+            drawNetworkDetail(
+                "MAC:",
+                adapter.macAddress
+            );
+            drawNetworkDetail(
+                "IPv4:",
+                adapter.ipv4Address
+            );
+            drawNetworkDetail(
+                "IPv6:",
+                adapter.ipv6Address
+            );
+            drawNetworkDetail(
+                "Gateway:",
+                adapter.defaultGateway
+            );
+            drawNetworkDetail(
+                "DNS:",
+                adapter.dnsServers
+            );
+
+            // ------------------------------------------------
+            // DOWNLOAD / UPLOAD SUMMARY CARDS
+            // ------------------------------------------------
+            drawRoundedBox(
+                hdc,
+                280,
+                500,
+                470,
+                650,
+                RGB(20, 24, 30)
+            );
+
+            drawText(
+                hdc,
+                "DOWNLOAD",
+                300,
+                515,
+                networkOrange,
+                labelFont
+            );
+            drawText(
+                hdc,
+                formatNetworkSpeed(
+                    adapter.downloadMbps
+                ),
+                300,
+                548,
+                textPrimary,
+                bigFont
+            );
+            drawText(
+                hdc,
+                "Total received",
+                300,
+                605,
+                textSecondary,
+                smallFont
+            );
+            drawText(
+                hdc,
+                formatNetworkBytes(
+                    adapter.totalDownloadedBytes
+                ),
+                300,
+                625,
+                textPrimary,
+                labelFont
+            );
+
+            drawRoundedBox(
+                hdc,
+                485,
+                500,
+                675,
+                650,
+                RGB(20, 24, 30)
+            );
+
+            drawText(
+                hdc,
+                "UPLOAD",
+                505,
+                515,
+                uploadBlue,
+                labelFont
+            );
+            drawText(
+                hdc,
+                formatNetworkSpeed(
+                    adapter.uploadMbps
+                ),
+                505,
+                548,
+                textPrimary,
+                bigFont
+            );
+            drawText(
+                hdc,
+                "Total sent",
+                505,
+                605,
+                textSecondary,
+                smallFont
+            );
+            drawText(
+                hdc,
+                formatNetworkBytes(
+                    adapter.totalUploadedBytes
+                ),
+                505,
+                625,
+                textPrimary,
+                labelFont
+            );
+
+            // ------------------------------------------------
+            // NETWORK ACTIVITY / CONNECTIONS
+            // ------------------------------------------------
+            drawRoundedBox(
+                hdc,
+                690,
+                465,
+                890,
+                650,
+                RGB(20, 24, 30)
+            );
+
+            drawText(
+                hdc,
+                "Network Activity",
+                705,
+                480,
+                textPrimary,
+                labelFont
+            );
+
+            int activityY = 510;
+            const int activityGap = 20;
+
+            auto drawActivity =
+                [&](const std::string& label,
+                    const std::string& value)
+            {
+                drawText(
+                    hdc,
+                    label,
+                    705,
+                    activityY,
+                    textSecondary,
+                    smallFont
+                );
+                drawText(
+                    hdc,
+                    shortenPerformanceText(
+                        value,
+                        15
+                    ),
+                    800,
+                    activityY,
+                    textPrimary,
+                    smallFont
+                );
+                activityY += activityGap;
+            };
+
+            drawActivity(
+                "Packets in:",
+                formatCount(
+                    adapter.packetsReceived
+                )
+            );
+            drawActivity(
+                "Packets out:",
+                formatCount(
+                    adapter.packetsSent
+                )
+            );
+            drawActivity(
+                "Tracked:",
+                formatNetworkDuration(
+                    adapter.trackedSinceTick
+                )
+            );
+            drawActivity(
+                "Connections:",
+                std::to_string(
+                    activeNetworkConnections.size()
+                )
+            );
+
+            if (!activeNetworkConnections.empty())
+            {
+                const NetworkConnectionInfo& connection =
+                    activeNetworkConnections.front();
+
+                drawActivity(
+                    "Top process:",
+                    connection.processName
+                );
+                drawActivity(
+                    "Remote:",
+                    connection.remoteAddress
+                );
+            }
+        }
     }
 }
 else
@@ -7919,28 +8930,106 @@ drawText(
     hdc,
     "GPU",
     60,
-    350,
+    345,
     textSecondary,
     labelFont
 );
 
-drawRoundedBox(
-    hdc,
-    60,
-    395,
-    145,
-    425,
-    RGB(36, 42, 54)
-);
+if (!gpuStats.empty())
+{
+    int dashboardGpuIndex = 0;
 
-drawText(
-    hdc,
-    "PLANNED",
-    75,
-    402,
-    textSecondary,
-    smallFont
-);
+    for (int i = 1;
+         i < static_cast<int>(
+             gpuStats.size()
+         );
+         i++)
+    {
+        if (
+            gpuStats[i].utilizationPercent >
+            gpuStats[dashboardGpuIndex].
+                utilizationPercent
+        )
+        {
+            dashboardGpuIndex = i;
+        }
+    }
+
+    const GpuStats& dashboardGpu =
+        gpuStats[dashboardGpuIndex];
+
+    std::ostringstream gpuPercent;
+    gpuPercent
+        << std::fixed
+        << std::setprecision(0)
+        << dashboardGpu.utilizationPercent
+        << "%";
+
+    drawText(
+        hdc,
+        gpuPercent.str(),
+        60,
+        378,
+        textPrimary,
+        bigFont
+    );
+
+    drawDiskHistoryGraph(
+        hdc,
+        150,
+        370,
+        135,
+        48,
+        dashboardGpu.utilizationHistory,
+        100.0,
+        RGB(155, 85, 220),
+        RGB(55, 31, 76)
+    );
+
+    std::string gpuName =
+        dashboardGpu.name;
+
+    if (gpuName.size() > 27)
+    {
+        gpuName =
+            gpuName.substr(0, 24) +
+            "...";
+    }
+
+    drawText(
+        hdc,
+        "GPU " +
+            std::to_string(
+                dashboardGpuIndex
+            ) +
+            " - " +
+            gpuName,
+        60,
+        425,
+        textSecondary,
+        smallFont
+    );
+}
+else
+{
+    drawText(
+        hdc,
+        "--",
+        60,
+        382,
+        textPrimary,
+        bigFont
+    );
+
+    drawText(
+        hdc,
+        "No GPU detected",
+        60,
+        425,
+        textSecondary,
+        smallFont
+    );
+}
 
 
 // --------------------------------------------------------
@@ -7960,28 +9049,95 @@ drawText(
     hdc,
     "NETWORK",
     360,
-    350,
+    345,
     textSecondary,
     labelFont
 );
 
-drawRoundedBox(
-    hdc,
-    360,
-    395,
-    445,
-    425,
-    RGB(36, 42, 54)
-);
+if (!networkStats.empty())
+{
+    const NetworkStats& dashboardNetwork =
+        networkStats.front();
 
-drawText(
-    hdc,
-    "PLANNED",
-    375,
-    402,
-    textSecondary,
-    smallFont
-);
+    drawText(
+        hdc,
+        "R " +
+            formatNetworkSpeed(
+                dashboardNetwork.downloadMbps
+            ),
+        360,
+        378,
+        textPrimary,
+        labelFont
+    );
+
+    drawText(
+        hdc,
+        "S " +
+            formatNetworkSpeed(
+                dashboardNetwork.uploadMbps
+            ),
+        360,
+        402,
+        textPrimary,
+        labelFont
+    );
+
+    drawNetworkHistoryGraph(
+        hdc,
+        475,
+        370,
+        115,
+        48,
+        dashboardNetwork,
+        getNetworkGraphScale(
+            dashboardNetwork
+        ),
+        RGB(220, 140, 55),
+        RGB(45, 145, 245)
+    );
+
+    std::string adapterText =
+        dashboardNetwork.type +
+        " - " +
+        dashboardNetwork.name;
+
+    if (adapterText.size() > 30)
+    {
+        adapterText =
+            adapterText.substr(0, 27) +
+            "...";
+    }
+
+    drawText(
+        hdc,
+        adapterText,
+        360,
+        425,
+        textSecondary,
+        smallFont
+    );
+}
+else
+{
+    drawText(
+        hdc,
+        "--",
+        360,
+        382,
+        textPrimary,
+        bigFont
+    );
+
+    drawText(
+        hdc,
+        "No active adapter",
+        360,
+        425,
+        textSecondary,
+        smallFont
+    );
+}
 
 
 // --------------------------------------------------------
@@ -8001,28 +9157,83 @@ drawText(
     hdc,
     "TEMPERATURE",
     660,
-    350,
+    345,
     textSecondary,
     labelFont
 );
 
-drawRoundedBox(
-    hdc,
-    660,
-    395,
-    745,
-    425,
-    RGB(36, 42, 54)
-);
+double dashboardTemperature = -1.0;
+int temperatureGpuIndex = -1;
 
-drawText(
-    hdc,
-    "PLANNED",
-    675,
-    402,
-    textSecondary,
-    smallFont
-);
+for (int i = 0;
+     i < static_cast<int>(
+         gpuStats.size()
+     );
+     i++)
+{
+    if (
+        gpuStats[i].temperatureC >= 0.0 &&
+        gpuStats[i].temperatureC >
+            dashboardTemperature
+    )
+    {
+        dashboardTemperature =
+            gpuStats[i].temperatureC;
+        temperatureGpuIndex = i;
+    }
+}
+
+if (dashboardTemperature >= 0.0)
+{
+    std::ostringstream temperature;
+    temperature
+        << std::fixed
+        << std::setprecision(0)
+        << dashboardTemperature
+        << " C";
+
+    drawText(
+        hdc,
+        temperature.str(),
+        660,
+        378,
+        textPrimary,
+        bigFont
+    );
+
+    drawText(
+        hdc,
+        "GPU " +
+            std::to_string(
+                temperatureGpuIndex
+            ) +
+            " temperature",
+        660,
+        425,
+        textSecondary,
+        smallFont
+    );
+}
+else
+{
+    drawText(
+        hdc,
+        "--",
+        660,
+        382,
+        textPrimary,
+        bigFont
+    );
+
+    drawText(
+        hdc,
+        "No supported temperature sensor",
+        660,
+        425,
+        textSecondary,
+        smallFont
+    );
+}
 
 
 // Restore normal drawing coordinates

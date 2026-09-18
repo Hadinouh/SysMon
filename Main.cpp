@@ -29,6 +29,7 @@ bool processSortDescending =
     PerformanceView::CPU;
     int selectedDiskIndex = 0;
     int selectedGpuIndex = 0;
+    int selectedNetworkIndex = 0;
     int systemInfoScrollOffset = 0;
     int systemInfoMaxScrollOffset = 0;
     std::string selectedConnectedDeviceKey = "";
@@ -650,6 +651,70 @@ if (
         return 0;
     }
 }
+
+// --------------------------------------------------------
+// NETWORK ADAPTER SELECTOR
+// --------------------------------------------------------
+if (
+    currentPage == AppPage::Performance &&
+    performanceView == PerformanceView::Network &&
+    networkStats.size() > 1 &&
+    mouseY >= 186 &&
+    mouseY <= 215
+)
+{
+    // UI.cpp draws the detailed Performance page with a
+    // +225 viewport X offset. These are the real window
+    // coordinates for the < and > adapter buttons.
+    if (
+        mouseX >= 1060 &&
+        mouseX <= 1083
+    )
+    {
+        selectedNetworkIndex--;
+
+        if (selectedNetworkIndex < 0)
+        {
+            selectedNetworkIndex =
+                static_cast<int>(
+                    networkStats.size()
+                ) - 1;
+        }
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+        return 0;
+    }
+
+    if (
+        mouseX >= 1087 &&
+        mouseX <= 1110
+    )
+    {
+        selectedNetworkIndex++;
+
+        if (
+            selectedNetworkIndex >=
+            static_cast<int>(
+                networkStats.size()
+            )
+        )
+        {
+            selectedNetworkIndex = 0;
+        }
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+        return 0;
+    }
+}
+
 // --------------------------------------------------------
 // SYSTEM INFO CONNECTED DEVICE CLICKS
 // --------------------------------------------------------
@@ -1335,6 +1400,7 @@ case WM_DEVICECHANGE:
 {
     // Refresh the About PC connected-device / network data
     // immediately when Windows reports a hardware change.
+    refreshNetworkStats(true);
     refreshSystemInfo(true);
     refreshGpuStats(true);
 
@@ -1378,6 +1444,16 @@ case WM_TIMER:
         )
         {
             selectedGpuIndex = 0;
+        }
+
+        if (
+            selectedNetworkIndex >=
+                static_cast<int>(
+                    networkStats.size()
+                )
+        )
+        {
+            selectedNetworkIndex = 0;
         }
 
         // Refresh the main dashboard if it is open

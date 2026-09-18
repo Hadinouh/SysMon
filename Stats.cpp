@@ -5,6 +5,8 @@
 #include <winsock2.h>
 #include <iphlpapi.h>
 #include <setupapi.h>
+#include <netioapi.h>
+#include <tlhelp32.h>
 #include "Stats.h"
 
 #include <ws2tcpip.h>
@@ -37,6 +39,8 @@ int diskPercent = 0;
 
 std::vector<DiskStats> diskStats;
 std::vector<GpuStats> gpuStats;
+std::vector<NetworkStats> networkStats;
+std::vector<NetworkConnectionInfo> activeNetworkConnections;
 SystemInfoData systemInfo;
 
 ULONGLONG uptimeSeconds = 0;
@@ -4447,12 +4451,982 @@ namespace
     }
 
 
+    struct NetworkCounterState
+    {
+        bool initialized = false;
+        ULONGLONG tickMs = 0;
+        unsigned long long inOctets = 0;
+        unsigned long long outOctets = 0;
+    };
+
+    std::map<std::string, NetworkCounterState>
+        networkCounterStates;
+
+    ULONGLONG lastNetworkEnumerationTick = 0;
+    ULONGLONG lastNetworkConnectionTick = 0;
+
+
+    struct NetworkApiFunctions
+    {
+        using GetAdaptersAddressesFn =
+            ULONG (WINAPI *)(
+                ULONG,
+                ULONG,
+                PVOID,
+                PIP_ADAPTER_ADDRESSES,
+                PULONG
+            );
+
+        using GetIfEntryFn =
+            DWORD (WINAPI *)(
+                PMIB_IFROW
+            );
+
+        using GetExtendedTcpTableFn =
+            DWORD (WINAPI *)(
+                PVOID,
+                PDWORD,
+                BOOL,
+                ULONG,
+                TCP_TABLE_CLASS,
+                ULONG
+            );
+
+        HMODULE module = nullptr;
+        GetAdaptersAddressesFn getAdaptersAddresses = nullptr;
+        GetIfEntryFn getIfEntry = nullptr;
+        GetExtendedTcpTableFn getExtendedTcpTable = nullptr;
+
+        bool validAdapters() const
+        {
+            return
+                module != nullptr &&
+                getAdaptersAddresses != nullptr;
+        }
+    };
+
+
+    NetworkApiFunctions& getNetworkApi()
+    {
+        static NetworkApiFunctions api;
+        static bool initialized = false;
+
+        if (!initialized)
+        {
+            initialized = true;
+
+            api.module =
+                LoadLibraryA("iphlpapi.dll");
+
+            if (api.module != nullptr)
+            {
+                api.getAdaptersAddresses =
+                    reinterpret_cast<
+                        NetworkApiFunctions::GetAdaptersAddressesFn
+                    >(
+                        GetProcAddress(
+                            api.module,
+                            "GetAdaptersAddresses"
+                        )
+                    );
+
+                api.getIfEntry =
+                    reinterpret_cast<
+                        NetworkApiFunctions::GetIfEntryFn
+                    >(
+                        GetProcAddress(
+                            api.module,
+                            "GetIfEntry"
+                        )
+                    );
+
+                api.getExtendedTcpTable =
+                    reinterpret_cast<
+                        NetworkApiFunctions::GetExtendedTcpTableFn
+                    >(
+                        GetProcAddress(
+                            api.module,
+                            "GetExtendedTcpTable"
+                        )
+                    );
+            }
+        }
+
+        return api;
+    }
+
+
+    std::string formatMacAddress(
+        const BYTE* address,
+        ULONG length)
+    {
+        if (address == nullptr ||
+            length == 0)
+        {
+            return "--";
+        }
+
+        std::ostringstream stream;
+        stream
+            << std::uppercase
+            << std::hex
+            << std::setfill('0');
+
+        ULONG visibleLength =
+            (std::min)(length, 8UL);
+
+        for (ULONG i = 0;
+             i < visibleLength;
+             i++)
+        {
+            if (i > 0)
+            {
+                stream << "-";
+            }
+
+            stream
+                << std::setw(2)
+                << static_cast<unsigned>(
+                    address[i]
+                );
+        }
+
+        return stream.str();
+    }
+
+
+    std::string socketAddressToText(
+        const SOCKET_ADDRESS& socketAddress)
+    {
+        if (socketAddress.lpSockaddr == nullptr)
+        {
+            return "--";
+        }
+
+        if (socketAddress.lpSockaddr->sa_family ==
+            AF_INET)
+        {
+            return ipv4ToText(
+                reinterpret_cast<
+                    const sockaddr_in*
+                >(
+                    socketAddress.lpSockaddr
+                )
+            );
+        }
+
+        if (socketAddress.lpSockaddr->sa_family ==
+            AF_INET6)
+        {
+            return ipv6ToText(
+                reinterpret_cast<
+                    const sockaddr_in6*
+                >(
+                    socketAddress.lpSockaddr
+                )
+            );
+        }
+
+        return "--";
+    }
+
+
+    void pushNetworkHistory(
+        std::vector<double>& history,
+        double value)
+    {
+        history.push_back(
+            (std::max)(0.0, value)
+        );
+
+        if (history.size() > 120)
+        {
+            history.erase(
+                history.begin()
+            );
+        }
+    }
+
+
+    void copyNetworkDynamicData(
+        const NetworkStats& oldAdapter,
+        NetworkStats& newAdapter)
+    {
+        newAdapter.performanceValid =
+            oldAdapter.performanceValid;
+        newAdapter.downloadMbps =
+            oldAdapter.downloadMbps;
+        newAdapter.uploadMbps =
+            oldAdapter.uploadMbps;
+        newAdapter.totalDownloadedBytes =
+            oldAdapter.totalDownloadedBytes;
+        newAdapter.totalUploadedBytes =
+            oldAdapter.totalUploadedBytes;
+        newAdapter.packetsSent =
+            oldAdapter.packetsSent;
+        newAdapter.packetsReceived =
+            oldAdapter.packetsReceived;
+        newAdapter.trackedSinceTick =
+            oldAdapter.trackedSinceTick;
+        newAdapter.downloadHistory =
+            oldAdapter.downloadHistory;
+        newAdapter.uploadHistory =
+            oldAdapter.uploadHistory;
+    }
+
+
+    void enumerateNetworkAdapters()
+    {
+        NetworkApiFunctions& api =
+            getNetworkApi();
+
+        if (!api.validAdapters())
+        {
+            networkStats.clear();
+            return;
+        }
+
+        ULONG bufferSize = 16 * 1024;
+        std::vector<BYTE> buffer(bufferSize);
+
+        ULONG flags =
+            GAA_FLAG_INCLUDE_GATEWAYS;
+
+        ULONG result =
+            api.getAdaptersAddresses(
+                AF_UNSPEC,
+                flags,
+                nullptr,
+                reinterpret_cast<
+                    PIP_ADAPTER_ADDRESSES
+                >(buffer.data()),
+                &bufferSize
+            );
+
+        if (result == ERROR_BUFFER_OVERFLOW)
+        {
+            buffer.resize(bufferSize);
+
+            result =
+                api.getAdaptersAddresses(
+                    AF_UNSPEC,
+                    flags,
+                    nullptr,
+                    reinterpret_cast<
+                        PIP_ADAPTER_ADDRESSES
+                    >(buffer.data()),
+                    &bufferSize
+                );
+        }
+
+        if (result != NO_ERROR)
+        {
+            return;
+        }
+
+        std::vector<NetworkStats> oldStats =
+            networkStats;
+        std::vector<NetworkStats> refreshed;
+        ULONGLONG now = GetTickCount64();
+
+        for (
+            PIP_ADAPTER_ADDRESSES adapter =
+                reinterpret_cast<
+                    PIP_ADAPTER_ADDRESSES
+                >(buffer.data());
+            adapter != nullptr;
+            adapter = adapter->Next
+        )
+        {
+            if (
+                adapter->OperStatus !=
+                    IfOperStatusUp ||
+                adapter->IfType ==
+                    IF_TYPE_SOFTWARE_LOOPBACK
+            )
+            {
+                continue;
+            }
+
+            bool hasAddress =
+                adapter->FirstUnicastAddress !=
+                nullptr;
+
+            bool usefulType =
+                adapter->IfType ==
+                    IF_TYPE_ETHERNET_CSMACD ||
+                adapter->IfType ==
+                    IF_TYPE_IEEE80211 ||
+                adapter->IfType ==
+                    IF_TYPE_PPP ||
+                adapter->IfType ==
+                    IF_TYPE_TUNNEL;
+
+            if (!hasAddress || !usefulType)
+            {
+                continue;
+            }
+
+            NetworkStats item;
+            item.index =
+                static_cast<int>(
+                    refreshed.size()
+                );
+            item.interfaceIndex =
+                adapter->IfIndex;
+
+            item.stableId =
+                adapter->AdapterName != nullptr
+                ? adapter->AdapterName
+                : std::to_string(
+                    adapter->IfIndex
+                  );
+
+            std::string friendly =
+                wideToAnsi(
+                    adapter->FriendlyName
+                );
+            std::string description =
+                wideToAnsi(
+                    adapter->Description
+                );
+
+            item.name =
+                !friendly.empty()
+                ? friendly
+                : (
+                    !description.empty()
+                    ? description
+                    : "Network adapter"
+                  );
+
+            item.description =
+                !description.empty()
+                ? description
+                : item.name;
+
+            item.type =
+                networkTypeText(
+                    adapter->IfType
+                );
+            item.status = "Connected";
+
+            item.macAddress =
+                formatMacAddress(
+                    adapter->PhysicalAddress,
+                    adapter->PhysicalAddressLength
+                );
+
+            unsigned long long linkBits =
+                (std::max)(
+                    static_cast<unsigned long long>(
+                        adapter->ReceiveLinkSpeed
+                    ),
+                    static_cast<unsigned long long>(
+                        adapter->TransmitLinkSpeed
+                    )
+                );
+
+            if (linkBits > 0)
+            {
+                item.linkSpeedMbps =
+                    static_cast<double>(
+                        linkBits
+                    ) /
+                    1000000.0;
+            }
+
+            for (
+                PIP_ADAPTER_UNICAST_ADDRESS address =
+                    adapter->FirstUnicastAddress;
+                address != nullptr;
+                address = address->Next
+            )
+            {
+                if (address->Address.lpSockaddr ==
+                    nullptr)
+                {
+                    continue;
+                }
+
+                int family =
+                    address->Address.
+                        lpSockaddr->sa_family;
+
+                if (
+                    family == AF_INET &&
+                    item.ipv4Address == "--"
+                )
+                {
+                    item.ipv4Address =
+                        socketAddressToText(
+                            address->Address
+                        );
+                }
+                else if (
+                    family == AF_INET6 &&
+                    item.ipv6Address == "--"
+                )
+                {
+                    item.ipv6Address =
+                        socketAddressToText(
+                            address->Address
+                        );
+                }
+            }
+
+            if (adapter->FirstGatewayAddress !=
+                nullptr)
+            {
+                item.defaultGateway =
+                    socketAddressToText(
+                        adapter->FirstGatewayAddress->
+                            Address
+                    );
+            }
+
+            std::ostringstream dns;
+            int dnsCount = 0;
+
+            for (
+                PIP_ADAPTER_DNS_SERVER_ADDRESS server =
+                    adapter->FirstDnsServerAddress;
+                server != nullptr &&
+                    dnsCount < 2;
+                server = server->Next
+            )
+            {
+                std::string address =
+                    socketAddressToText(
+                        server->Address
+                    );
+
+                if (address == "--")
+                {
+                    continue;
+                }
+
+                if (dnsCount > 0)
+                {
+                    dns << ", ";
+                }
+
+                dns << address;
+                dnsCount++;
+            }
+
+            if (dnsCount > 0)
+            {
+                item.dnsServers = dns.str();
+            }
+
+            for (const NetworkStats& oldItem :
+                 oldStats)
+            {
+                if (oldItem.stableId ==
+                    item.stableId)
+                {
+                    copyNetworkDynamicData(
+                        oldItem,
+                        item
+                    );
+                    break;
+                }
+            }
+
+            if (item.trackedSinceTick == 0)
+            {
+                item.trackedSinceTick = now;
+            }
+
+            refreshed.push_back(item);
+        }
+
+        std::stable_sort(
+            refreshed.begin(),
+            refreshed.end(),
+            [](const NetworkStats& a,
+               const NetworkStats& b)
+            {
+                auto score =
+                    [](const NetworkStats& item)
+                    -> int
+                {
+                    int value = 0;
+
+                    if (item.type == "Ethernet")
+                    {
+                        value += 30;
+                    }
+                    else if (item.type == "Wi-Fi")
+                    {
+                        value += 25;
+                    }
+
+                    if (item.defaultGateway != "--")
+                    {
+                        value += 20;
+                    }
+
+                    if (item.ipv4Address != "--")
+                    {
+                        value += 10;
+                    }
+
+                    return value;
+                };
+
+                return score(a) > score(b);
+            }
+        );
+
+        for (size_t i = 0;
+             i < refreshed.size();
+             i++)
+        {
+            refreshed[i].index =
+                static_cast<int>(i);
+        }
+
+        networkStats =
+            std::move(refreshed);
+    }
+
+
+    void updateNetworkCounters()
+    {
+        NetworkApiFunctions& api =
+            getNetworkApi();
+
+        ULONGLONG now =
+            GetTickCount64();
+
+        for (NetworkStats& adapter :
+             networkStats)
+        {
+            adapter.performanceValid = false;
+            adapter.downloadMbps = 0.0;
+            adapter.uploadMbps = 0.0;
+
+            if (api.getIfEntry == nullptr)
+            {
+                pushNetworkHistory(
+                    adapter.downloadHistory,
+                    0.0
+                );
+                pushNetworkHistory(
+                    adapter.uploadHistory,
+                    0.0
+                );
+                continue;
+            }
+
+            MIB_IFROW row = {};
+            row.dwIndex =
+                adapter.interfaceIndex;
+
+            if (api.getIfEntry(&row) !=
+                NO_ERROR)
+            {
+                pushNetworkHistory(
+                    adapter.downloadHistory,
+                    0.0
+                );
+                pushNetworkHistory(
+                    adapter.uploadHistory,
+                    0.0
+                );
+                continue;
+            }
+
+            adapter.totalDownloadedBytes =
+                static_cast<unsigned long long>(
+                    row.dwInOctets
+                );
+            adapter.totalUploadedBytes =
+                static_cast<unsigned long long>(
+                    row.dwOutOctets
+                );
+
+            adapter.packetsReceived =
+                static_cast<unsigned long long>(
+                    row.dwInUcastPkts +
+                    row.dwInNUcastPkts
+                );
+            adapter.packetsSent =
+                static_cast<unsigned long long>(
+                    row.dwOutUcastPkts +
+                    row.dwOutNUcastPkts
+                );
+
+            NetworkCounterState& state =
+                networkCounterStates[
+                    adapter.stableId
+                ];
+
+            if (!state.initialized)
+            {
+                state.initialized = true;
+                state.tickMs = now;
+                state.inOctets =
+                    adapter.totalDownloadedBytes;
+                state.outOctets =
+                    adapter.totalUploadedBytes;
+
+                pushNetworkHistory(
+                    adapter.downloadHistory,
+                    0.0
+                );
+                pushNetworkHistory(
+                    adapter.uploadHistory,
+                    0.0
+                );
+                continue;
+            }
+
+            ULONGLONG elapsedMs =
+                now - state.tickMs;
+
+            const unsigned long long counterWrap =
+                0x100000000ULL;
+
+            unsigned long long inDelta =
+                adapter.totalDownloadedBytes >=
+                    state.inOctets
+                ? adapter.totalDownloadedBytes -
+                    state.inOctets
+                : counterWrap -
+                    state.inOctets +
+                    adapter.totalDownloadedBytes;
+
+            unsigned long long outDelta =
+                adapter.totalUploadedBytes >=
+                    state.outOctets
+                ? adapter.totalUploadedBytes -
+                    state.outOctets
+                : counterWrap -
+                    state.outOctets +
+                    adapter.totalUploadedBytes;
+
+            state.tickMs = now;
+            state.inOctets =
+                adapter.totalDownloadedBytes;
+            state.outOctets =
+                adapter.totalUploadedBytes;
+
+            if (elapsedMs > 0)
+            {
+                double elapsedSeconds =
+                    elapsedMs / 1000.0;
+
+                adapter.downloadMbps =
+                    static_cast<double>(
+                        inDelta
+                    ) * 8.0 /
+                    elapsedSeconds /
+                    1000000.0;
+
+                adapter.uploadMbps =
+                    static_cast<double>(
+                        outDelta
+                    ) * 8.0 /
+                    elapsedSeconds /
+                    1000000.0;
+
+                adapter.performanceValid = true;
+            }
+
+            pushNetworkHistory(
+                adapter.downloadHistory,
+                adapter.downloadMbps
+            );
+            pushNetworkHistory(
+                adapter.uploadHistory,
+                adapter.uploadMbps
+            );
+        }
+    }
+
+
+    std::map<DWORD, std::string>
+    snapshotProcessNames()
+    {
+        std::map<DWORD, std::string> result;
+
+        HANDLE snapshot =
+            CreateToolhelp32Snapshot(
+                TH32CS_SNAPPROCESS,
+                0
+            );
+
+        if (snapshot ==
+            INVALID_HANDLE_VALUE)
+        {
+            return result;
+        }
+
+        PROCESSENTRY32 entry = {};
+        entry.dwSize = sizeof(entry);
+
+        if (Process32First(
+                snapshot,
+                &entry
+            ))
+        {
+            do
+            {
+                result[
+                    entry.th32ProcessID
+                ] = entry.szExeFile;
+            }
+            while (Process32Next(
+                snapshot,
+                &entry
+            ));
+        }
+
+        CloseHandle(snapshot);
+        return result;
+    }
+
+
+    std::string tcpStateText(
+        DWORD state)
+    {
+        switch (state)
+        {
+        case MIB_TCP_STATE_ESTAB:
+            return "ESTABLISHED";
+        case MIB_TCP_STATE_SYN_SENT:
+            return "SYN_SENT";
+        case MIB_TCP_STATE_SYN_RCVD:
+            return "SYN_RECEIVED";
+        case MIB_TCP_STATE_FIN_WAIT1:
+            return "FIN_WAIT_1";
+        case MIB_TCP_STATE_FIN_WAIT2:
+            return "FIN_WAIT_2";
+        case MIB_TCP_STATE_CLOSE_WAIT:
+            return "CLOSE_WAIT";
+        default:
+            return "ACTIVE";
+        }
+    }
+
+
+    unsigned short networkPortToHost(
+        DWORD value)
+    {
+        unsigned short port =
+            static_cast<unsigned short>(
+                value & 0xFFFF
+            );
+
+        return static_cast<unsigned short>(
+            (port >> 8) |
+            (port << 8)
+        );
+    }
+
+
+    std::string ipv4DwordToText(
+        DWORD address)
+    {
+        const unsigned char* bytes =
+            reinterpret_cast<
+                const unsigned char*
+            >(&address);
+
+        std::ostringstream stream;
+        stream
+            << static_cast<unsigned>(bytes[0])
+            << "."
+            << static_cast<unsigned>(bytes[1])
+            << "."
+            << static_cast<unsigned>(bytes[2])
+            << "."
+            << static_cast<unsigned>(bytes[3]);
+
+        return stream.str();
+    }
+
+
+    void refreshActiveConnections()
+    {
+        activeNetworkConnections.clear();
+
+        NetworkApiFunctions& api =
+            getNetworkApi();
+
+        if (api.getExtendedTcpTable ==
+            nullptr)
+        {
+            return;
+        }
+
+        DWORD bytes = 0;
+
+        DWORD result =
+            api.getExtendedTcpTable(
+                nullptr,
+                &bytes,
+                FALSE,
+                AF_INET,
+                TCP_TABLE_OWNER_PID_CONNECTIONS,
+                0
+            );
+
+        if (result != ERROR_INSUFFICIENT_BUFFER ||
+            bytes == 0)
+        {
+            return;
+        }
+
+        std::vector<BYTE> buffer(bytes);
+
+        result =
+            api.getExtendedTcpTable(
+                buffer.data(),
+                &bytes,
+                FALSE,
+                AF_INET,
+                TCP_TABLE_OWNER_PID_CONNECTIONS,
+                0
+            );
+
+        if (result != NO_ERROR)
+        {
+            return;
+        }
+
+        auto* table =
+            reinterpret_cast<
+                PMIB_TCPTABLE_OWNER_PID
+            >(buffer.data());
+
+        std::map<DWORD, std::string>
+            processNames =
+                snapshotProcessNames();
+
+        for (DWORD i = 0;
+             i < table->dwNumEntries;
+             i++)
+        {
+            const MIB_TCPROW_OWNER_PID& row =
+                table->table[i];
+
+            if (
+                row.dwState ==
+                    MIB_TCP_STATE_LISTEN ||
+                row.dwRemoteAddr == 0
+            )
+            {
+                continue;
+            }
+
+            NetworkConnectionInfo item;
+            item.pid = row.dwOwningPid;
+
+            auto process =
+                processNames.find(
+                    item.pid
+                );
+
+            if (process !=
+                processNames.end())
+            {
+                item.processName =
+                    process->second;
+            }
+            else
+            {
+                item.processName =
+                    "PID " +
+                    std::to_string(
+                        item.pid
+                    );
+            }
+
+            std::ostringstream remote;
+            remote
+                << ipv4DwordToText(
+                    row.dwRemoteAddr
+                )
+                << ":"
+                << networkPortToHost(
+                    row.dwRemotePort
+                );
+
+            item.remoteAddress =
+                remote.str();
+            item.state =
+                tcpStateText(
+                    row.dwState
+                );
+
+            activeNetworkConnections.push_back(
+                item
+            );
+        }
+
+        std::stable_sort(
+            activeNetworkConnections.begin(),
+            activeNetworkConnections.end(),
+            [](const NetworkConnectionInfo& a,
+               const NetworkConnectionInfo& b)
+            {
+                bool aEstablished =
+                    a.state == "ESTABLISHED";
+                bool bEstablished =
+                    b.state == "ESTABLISHED";
+
+                if (aEstablished != bEstablished)
+                {
+                    return aEstablished;
+                }
+
+                if (a.processName != b.processName)
+                {
+                    return
+                        a.processName <
+                        b.processName;
+                }
+
+                return
+                    a.remoteAddress <
+                    b.remoteAddress;
+            }
+        );
+
+        if (activeNetworkConnections.size() >
+            12)
+        {
+            activeNetworkConnections.resize(12);
+        }
+    }
+
+
     void queryNetworkInfo()
     {
         systemInfo.networkAdapter = "--";
         systemInfo.networkConnectionType = "--";
         systemInfo.ipv4Address = "--";
         systemInfo.ipv6Address = "--";
+
+        if (!networkStats.empty())
+        {
+            const NetworkStats& best =
+                networkStats.front();
+
+            systemInfo.networkAdapter =
+                best.description;
+            systemInfo.networkConnectionType =
+                best.type;
+            systemInfo.ipv4Address =
+                best.ipv4Address;
+            systemInfo.ipv6Address =
+                best.ipv6Address;
+            return;
+        }
 
         using GetAdaptersAddressesFn =
             ULONG (WINAPI *)(
@@ -5218,6 +6192,35 @@ void refreshGpuStats(bool force)
 }
 
 
+void refreshNetworkStats(bool force)
+{
+    ULONGLONG now =
+        GetTickCount64();
+
+    if (
+        force ||
+        lastNetworkEnumerationTick == 0 ||
+        now - lastNetworkEnumerationTick >= 5000
+    )
+    {
+        enumerateNetworkAdapters();
+        lastNetworkEnumerationTick = now;
+    }
+
+    updateNetworkCounters();
+
+    if (
+        force ||
+        lastNetworkConnectionTick == 0 ||
+        now - lastNetworkConnectionTick >= 2000
+    )
+    {
+        refreshActiveConnections();
+        lastNetworkConnectionTick = now;
+    }
+}
+
+
 void refreshSystemInfo(bool force)
 {
     ULONGLONG now =
@@ -5449,6 +6452,10 @@ void updateStats()
 
     // GPU performance and hot-plug detection.
     refreshGpuStats(false);
+
+
+    // Network performance and adapter hot-plug detection.
+    refreshNetworkStats(false);
 
 
     // System / hardware overview and connected-device refresh.
