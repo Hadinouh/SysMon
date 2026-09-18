@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <Platform>x64</Platform>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64</Platforms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="ThirdParty\**\*.cs" />
+    <EmbeddedResource Remove="ThirdParty\**\*" />
+    <None Remove="ThirdParty\**\*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="ThirdParty\LibreHardwareMonitor\LibreHardwareMonitorLib\LibreHardwareMonitorLib.csproj" />
+    <PackageReference Include="System.Resources.Extensions" Version="10.0.12" />
+  </ItemGroup>
+
+</Project>

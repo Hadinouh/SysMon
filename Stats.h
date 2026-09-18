@@ -67,6 +67,7 @@ struct GpuStats
     std::vector<double> sharedMemoryHistory;
     std::vector<double> encodeHistory;
     std::vector<double> decodeHistory;
+    std::vector<double> temperatureHistory;
 };
 
 
@@ -107,6 +108,48 @@ struct NetworkStats
 
     std::vector<double> downloadHistory;
     std::vector<double> uploadHistory;
+};
+
+
+struct ThermalSensorInfo
+{
+    std::string name = "--";
+    std::string category = "System";
+    double temperatureC = -1.0;
+};
+
+
+struct TemperatureStats
+{
+    bool acpiAvailable = false;
+    bool hardwareSensorAvailable = false;
+
+    double cpuTemperatureC = -1.0;
+    double motherboardTemperatureC = -1.0;
+    double systemTemperatureC = -1.0;
+    double cpuPackagePowerW = -1.0;
+    double cpuAverageClockMHz = -1.0;
+
+    std::string cpuSensorName = "--";
+    std::string motherboardSensorName = "--";
+    bool cpuSensorGeneric = false;
+    bool motherboardSensorGeneric = false;
+    bool cpuSensorFromHardware = false;
+    bool motherboardSensorFromHardware = false;
+
+    // Generic ACPI zones exposed by Windows.
+    std::vector<ThermalSensorInfo> sensors;
+
+    // Sensors reported by the bundled SysMonSensors helper.
+    std::vector<ThermalSensorInfo> cpuSensors;
+    std::vector<ThermalSensorInfo> motherboardSensors;
+
+    // Per-physical-core temperatures when the CPU actually exposes
+    // individual thermal sensors. Unsupported cores stay at -1.0.
+    std::vector<double> cpuCoreTemperatures;
+
+    std::vector<double> cpuTemperatureHistory;
+    std::vector<double> motherboardTemperatureHistory;
 };
 
 
@@ -202,12 +245,14 @@ extern std::vector<DiskStats> diskStats;
 extern std::vector<GpuStats> gpuStats;
 extern std::vector<NetworkStats> networkStats;
 extern std::vector<NetworkConnectionInfo> activeNetworkConnections;
+extern TemperatureStats temperatureStats;
 extern SystemInfoData systemInfo;
 
 extern ULONGLONG uptimeSeconds;
 
 extern std::vector<double> cpuHistory;
 extern std::vector<double> ramHistory;
+extern std::vector<double> cpuCoreUsage;
 
 
 double getCpuUsage();
@@ -217,3 +262,6 @@ void addRamHistorySample();
 void refreshSystemInfo(bool force = false);
 void refreshGpuStats(bool force = false);
 void refreshNetworkStats(bool force = false);
+void refreshTemperatureStats(bool force = false);
+bool startHardwareSensorBridge();
+void stopHardwareSensorBridge();

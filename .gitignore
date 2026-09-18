@@ -1,4 +1,8 @@
 *.exe
 *.o
+*.res
 .vscode/
 SysMon.ini
+
+**/bin/
+**/obj/

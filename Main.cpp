@@ -30,6 +30,9 @@ bool processSortDescending =
     int selectedDiskIndex = 0;
     int selectedGpuIndex = 0;
     int selectedNetworkIndex = 0;
+    TemperatureView temperatureView =
+        TemperatureView::CPU;
+    int selectedTemperatureGpuIndex = 0;
     int systemInfoScrollOffset = 0;
     int systemInfoMaxScrollOffset = 0;
     std::string selectedConnectedDeviceKey = "";
@@ -193,8 +196,10 @@ widgetValueFont =
         DEFAULT_PITCH,
         "Segoe UI"
     );
-        // Initialize CPU counters
+        // Initialize CPU counters and start the bundled hardware
+        // sensor helper before the first statistics refresh.
         getCpuUsage();
+        startHardwareSensorBridge();
 
         updateStats();
 
@@ -653,6 +658,85 @@ if (
 }
 
 // --------------------------------------------------------
+// TEMPERATURE PAGE SELECTOR
+// --------------------------------------------------------
+if (
+    currentPage == AppPage::Temperatures &&
+    mouseY >= 115 &&
+    mouseY <= 170
+)
+{
+    // UI content starts at X=225.
+    if (mouseX >= 260 && mouseX <= 410)
+    {
+        temperatureView =
+            TemperatureView::CPU;
+
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+
+    if (mouseX >= 425 && mouseX <= 575)
+    {
+        temperatureView =
+            TemperatureView::GPU;
+
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+
+    if (mouseX >= 590 && mouseX <= 765)
+    {
+        temperatureView =
+            TemperatureView::Motherboard;
+
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+}
+
+// GPU selector arrows on the temperature GPU page.
+if (
+    currentPage == AppPage::Temperatures &&
+    temperatureView == TemperatureView::GPU &&
+    gpuStats.size() > 1 &&
+    mouseY >= 190 &&
+    mouseY <= 220
+)
+{
+    if (mouseX >= 1055 && mouseX <= 1078)
+    {
+        selectedTemperatureGpuIndex--;
+
+        if (selectedTemperatureGpuIndex < 0)
+        {
+            selectedTemperatureGpuIndex =
+                static_cast<int>(gpuStats.size()) - 1;
+        }
+
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+
+    if (mouseX >= 1082 && mouseX <= 1105)
+    {
+        selectedTemperatureGpuIndex++;
+
+        if (
+            selectedTemperatureGpuIndex >=
+            static_cast<int>(gpuStats.size())
+        )
+        {
+            selectedTemperatureGpuIndex = 0;
+        }
+
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+}
+
+
+// --------------------------------------------------------
 // NETWORK ADAPTER SELECTOR
 // --------------------------------------------------------
 if (
@@ -996,12 +1080,33 @@ if (
     }
 
 
-    // System Info
+    // Temperatures
     if (
         mouseX >= 35 &&
         mouseX <= 185 &&
         mouseY >= 275 &&
         mouseY <= 320
+    )
+    {
+        currentPage =
+            AppPage::Temperatures;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+
+    // System Info
+    if (
+        mouseX >= 35 &&
+        mouseX <= 185 &&
+        mouseY >= 325 &&
+        mouseY <= 370
     )
     {
         currentPage =
@@ -1023,8 +1128,8 @@ if (
     if (
         mouseX >= 35 &&
         mouseX <= 185 &&
-        mouseY >= 325 &&
-        mouseY <= 370
+        mouseY >= 375 &&
+        mouseY <= 420
     )
     {
         currentPage =
@@ -1300,6 +1405,31 @@ if (
 }
 
     // --------------------------------------------------------
+    // DASHBOARD TEMPERATURE CARD
+    // --------------------------------------------------------
+
+    if (
+        currentPage == AppPage::Dashboard &&
+        mouseX >= 860 &&
+        mouseX <= 1140 &&
+        mouseY >= 325 &&
+        mouseY <= 450
+    )
+    {
+        currentPage =
+            AppPage::Temperatures;
+
+        InvalidateRect(
+            hwnd,
+            nullptr,
+            FALSE
+        );
+
+        return 0;
+    }
+
+
+    // --------------------------------------------------------
     // DESKTOP WIDGET TOGGLE
     // --------------------------------------------------------
 
@@ -1403,10 +1533,12 @@ case WM_DEVICECHANGE:
     refreshNetworkStats(true);
     refreshSystemInfo(true);
     refreshGpuStats(true);
+    refreshTemperatureStats(true);
 
     if (
         currentPage == AppPage::SystemInfo ||
-        currentPage == AppPage::Performance
+        currentPage == AppPage::Performance ||
+        currentPage == AppPage::Temperatures
     )
     {
         InvalidateRect(
@@ -1454,6 +1586,16 @@ case WM_TIMER:
         )
         {
             selectedNetworkIndex = 0;
+        }
+
+        if (
+            selectedTemperatureGpuIndex >=
+                static_cast<int>(
+                    gpuStats.size()
+                )
+        )
+        {
+            selectedTemperatureGpuIndex = 0;
         }
 
         // Refresh the main dashboard if it is open
@@ -1682,6 +1824,8 @@ case WM_TRAYICON:
 
     DeleteObject(widgetLabelFont);
     DeleteObject(widgetValueFont);
+
+    stopHardwareSensorBridge();
 
 removeTrayIcon();
     PostQuitMessage(0);

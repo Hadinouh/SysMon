@@ -29,6 +29,7 @@
 double cpuUsage = 0.0;
 std::vector<double> cpuHistory;
 std::vector<double> ramHistory;
+std::vector<double> cpuCoreUsage;
 double usedRamGB = 0.0;
 double totalRamGB = 0.0;
 int ramPercent = 0;
@@ -41,6 +42,7 @@ std::vector<DiskStats> diskStats;
 std::vector<GpuStats> gpuStats;
 std::vector<NetworkStats> networkStats;
 std::vector<NetworkConnectionInfo> activeNetworkConnections;
+TemperatureStats temperatureStats;
 SystemInfoData systemInfo;
 
 ULONGLONG uptimeSeconds = 0;
@@ -3079,6 +3081,8 @@ namespace
                         oldGpu.encodeHistory;
                     gpu.decodeHistory =
                         oldGpu.decodeHistory;
+                    gpu.temperatureHistory =
+                        oldGpu.temperatureHistory;
 
                     gpu.busInterface =
                         oldGpu.busInterface;
@@ -3430,6 +3434,57 @@ namespace
         }
 
         return result;
+    }
+
+
+    struct ThermalPdhState
+    {
+        bool initialized = false;
+        PDH_HQUERY query = nullptr;
+        PDH_HCOUNTER temperature = nullptr;
+    };
+
+
+    ThermalPdhState& getThermalPdhState()
+    {
+        static ThermalPdhState state;
+
+        if (state.initialized)
+        {
+            return state;
+        }
+
+        state.initialized = true;
+
+        PdhFunctions& pdh =
+            getPdhFunctions();
+
+        if (!pdh.valid())
+        {
+            return state;
+        }
+
+        if (pdh.openQuery(
+                nullptr,
+                0,
+                &state.query
+            ) != ERROR_SUCCESS)
+        {
+            state.query = nullptr;
+            return state;
+        }
+
+        if (pdh.addEnglishCounter(
+                state.query,
+                L"\\Thermal Zone Information(*)\\Temperature",
+                0,
+                &state.temperature
+            ) != ERROR_SUCCESS)
+        {
+            state.temperature = nullptr;
+        }
+
+        return state;
     }
 
 
@@ -4309,6 +4364,14 @@ namespace
                 gpu.decodeHistory,
                 gpu.decodePercent
             );
+
+            if (gpu.temperatureC >= 0.0)
+            {
+                pushGpuHistory(
+                    gpu.temperatureHistory,
+                    gpu.temperatureC
+                );
+            }
         }
     }
 
@@ -6153,6 +6216,667 @@ namespace
 
         systemInfo.initialized = true;
     }
+
+
+    struct ProcessorPerformanceInfoLocal
+    {
+        LARGE_INTEGER IdleTime;
+        LARGE_INTEGER KernelTime;
+        LARGE_INTEGER UserTime;
+        LARGE_INTEGER DpcTime;
+        LARGE_INTEGER InterruptTime;
+        ULONG InterruptCount;
+    };
+
+
+    void updateCpuCoreUsageInternal()
+    {
+        using NtQuerySystemInformationFn =
+            LONG (WINAPI *)(
+                ULONG,
+                PVOID,
+                ULONG,
+                PULONG
+            );
+
+        static HMODULE ntdll =
+            LoadLibraryA("ntdll.dll");
+
+        static NtQuerySystemInformationFn queryFn =
+            ntdll != nullptr
+            ? reinterpret_cast<
+                NtQuerySystemInformationFn
+              >(
+                GetProcAddress(
+                    ntdll,
+                    "NtQuerySystemInformation"
+                )
+              )
+            : nullptr;
+
+        if (queryFn == nullptr)
+        {
+            return;
+        }
+
+        SYSTEM_INFO info = {};
+        GetNativeSystemInfo(&info);
+
+        ULONG processorCount =
+            info.dwNumberOfProcessors;
+
+        if (processorCount == 0)
+        {
+            return;
+        }
+
+        std::vector<ProcessorPerformanceInfoLocal> current(
+            processorCount
+        );
+
+        ULONG returnLength = 0;
+
+        LONG status =
+            queryFn(
+                8, // SystemProcessorPerformanceInformation
+                current.data(),
+                static_cast<ULONG>(
+                    current.size() *
+                    sizeof(ProcessorPerformanceInfoLocal)
+                ),
+                &returnLength
+            );
+
+        if (status < 0)
+        {
+            return;
+        }
+
+        size_t actualCount =
+            returnLength > 0
+            ? returnLength /
+                sizeof(ProcessorPerformanceInfoLocal)
+            : current.size();
+
+        if (actualCount == 0 ||
+            actualCount > current.size())
+        {
+            actualCount = current.size();
+        }
+
+        current.resize(actualCount);
+
+        static std::vector<ProcessorPerformanceInfoLocal>
+            previous;
+
+        if (previous.size() != current.size())
+        {
+            previous = current;
+            cpuCoreUsage.assign(
+                current.size(),
+                0.0
+            );
+            return;
+        }
+
+        cpuCoreUsage.resize(
+            current.size(),
+            0.0
+        );
+
+        for (size_t index = 0;
+             index < current.size();
+             index++)
+        {
+            LONGLONG idleDiff =
+                current[index].IdleTime.QuadPart -
+                previous[index].IdleTime.QuadPart;
+
+            LONGLONG kernelDiff =
+                current[index].KernelTime.QuadPart -
+                previous[index].KernelTime.QuadPart;
+
+            LONGLONG userDiff =
+                current[index].UserTime.QuadPart -
+                previous[index].UserTime.QuadPart;
+
+            LONGLONG total =
+                kernelDiff +
+                userDiff;
+
+            double usage = 0.0;
+
+            if (total > 0 &&
+                idleDiff >= 0)
+            {
+                usage =
+                    100.0 *
+                    (
+                        1.0 -
+                        static_cast<double>(
+                            idleDiff
+                        ) /
+                        static_cast<double>(
+                            total
+                        )
+                    );
+            }
+
+            cpuCoreUsage[index] =
+                std::clamp(
+                    usage,
+                    0.0,
+                    100.0
+                );
+        }
+
+        previous = current;
+    }
+}
+
+// ============================================================
+// SysMonSensors bridge
+// ============================================================
+// The native UI stays C++/Win32. A small bundled .NET helper
+// hosts LibreHardwareMonitor and streams sensor snapshots over a
+// redirected stdout pipe. Reading happens on a background Win32
+// thread so the 500 ms UI timer never blocks on hardware access.
+
+struct BridgeSensorReading
+{
+    std::string hardwareType;
+    std::string hardwareName;
+    std::string sensorType;
+    std::string sensorName;
+    double value = 0.0;
+};
+
+struct BridgeSnapshot
+{
+    bool valid = false;
+    ULONGLONG receivedTick = 0;
+    std::vector<BridgeSensorReading> sensors;
+};
+
+static HANDLE sensorBridgeProcess = nullptr;
+static HANDLE sensorBridgeReadPipe = nullptr;
+static HANDLE sensorBridgeReader = nullptr;
+static CRITICAL_SECTION sensorBridgeLock;
+static bool sensorBridgeLockInitialized = false;
+static volatile LONG sensorBridgeStopRequested = 0;
+static BridgeSnapshot latestSensorSnapshot;
+
+static bool fileExistsA(const std::string& path)
+{
+    DWORD attributes = GetFileAttributesA(path.c_str());
+
+    return
+        attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+static std::string getSysMonDirectory()
+{
+    char path[MAX_PATH] = {};
+    DWORD length = GetModuleFileNameA(nullptr, path, MAX_PATH);
+
+    if (length == 0 || length >= MAX_PATH)
+    {
+        return ".";
+    }
+
+    std::string result(path, length);
+    size_t slash = result.find_last_of("\\/");
+
+    if (slash == std::string::npos)
+    {
+        return ".";
+    }
+
+    return result.substr(0, slash);
+}
+
+static std::string findSensorHelperPath()
+{
+    const std::string base = getSysMonDirectory();
+
+  const std::vector<std::string> candidates =
+{
+    base + "\\SysMonSensors.exe",
+    base + "\\SysMonSensors\\bin\\x64\\Release\\net10.0\\SysMonSensors.exe",
+    base + "\\SysMonSensors\\bin\\x64\\Debug\\net10.0\\SysMonSensors.exe",
+    base + "\\SysMonSensors\\bin\\Release\\net10.0\\SysMonSensors.exe",
+    base + "\\SysMonSensors\\bin\\Debug\\net10.0\\SysMonSensors.exe"
+};
+
+    for (const std::string& candidate : candidates)
+    {
+        if (fileExistsA(candidate))
+        {
+            return candidate;
+        }
+    }
+
+    return std::string();
+}
+
+static bool parseBridgeSensorLine(
+    const std::string& line,
+    BridgeSensorReading& reading)
+{
+    std::vector<std::string> fields;
+    size_t start = 0;
+
+    while (true)
+    {
+        size_t separator = line.find('|', start);
+
+        if (separator == std::string::npos)
+        {
+            fields.push_back(line.substr(start));
+            break;
+        }
+
+        fields.push_back(
+            line.substr(start, separator - start)
+        );
+        start = separator + 1;
+    }
+
+    if (fields.size() != 6 ||
+        fields[0] != "SENSOR" ||
+        fields[5] == "--")
+    {
+        return false;
+    }
+
+    char* end = nullptr;
+    double value = std::strtod(fields[5].c_str(), &end);
+
+    if (end == fields[5].c_str() || *end != '\0')
+    {
+        return false;
+    }
+
+    reading.hardwareType = fields[1];
+    reading.hardwareName = fields[2];
+    reading.sensorType = fields[3];
+    reading.sensorName = fields[4];
+    reading.value = value;
+    return true;
+}
+
+static void publishBridgeSnapshot(
+    const std::vector<BridgeSensorReading>& sensors)
+{
+    if (!sensorBridgeLockInitialized)
+    {
+        return;
+    }
+
+    EnterCriticalSection(&sensorBridgeLock);
+    latestSensorSnapshot.valid = true;
+    latestSensorSnapshot.receivedTick = GetTickCount64();
+    latestSensorSnapshot.sensors = sensors;
+    LeaveCriticalSection(&sensorBridgeLock);
+}
+
+static bool copyBridgeSnapshot(BridgeSnapshot& snapshot)
+{
+    if (!sensorBridgeLockInitialized)
+    {
+        return false;
+    }
+
+    EnterCriticalSection(&sensorBridgeLock);
+    snapshot = latestSensorSnapshot;
+    LeaveCriticalSection(&sensorBridgeLock);
+
+    if (!snapshot.valid)
+    {
+        return false;
+    }
+
+    ULONGLONG now = GetTickCount64();
+
+    return
+        now >= snapshot.receivedTick &&
+        now - snapshot.receivedTick <= 3000;
+}
+
+static DWORD WINAPI sensorBridgeReaderProc(LPVOID)
+{
+    std::string pending;
+    std::vector<BridgeSensorReading> current;
+    bool inSnapshot = false;
+    char buffer[4096];
+
+    while (
+        InterlockedCompareExchange(
+            &sensorBridgeStopRequested,
+            0,
+            0
+        ) == 0
+    )
+    {
+        DWORD bytesRead = 0;
+        BOOL ok = ReadFile(
+            sensorBridgeReadPipe,
+            buffer,
+            sizeof(buffer),
+            &bytesRead,
+            nullptr
+        );
+
+        if (!ok || bytesRead == 0)
+        {
+            break;
+        }
+
+        pending.append(buffer, bytesRead);
+
+        while (true)
+        {
+            size_t newline = pending.find('\n');
+
+            if (newline == std::string::npos)
+            {
+                break;
+            }
+
+            std::string line = pending.substr(0, newline);
+            pending.erase(0, newline + 1);
+
+            if (!line.empty() && line.back() == '\r')
+            {
+                line.pop_back();
+            }
+
+            if (line == "SNAPSHOT_BEGIN")
+            {
+                current.clear();
+                inSnapshot = true;
+                continue;
+            }
+
+            if (line == "SNAPSHOT_END")
+            {
+                if (inSnapshot)
+                {
+                    publishBridgeSnapshot(current);
+                }
+
+                current.clear();
+                inSnapshot = false;
+                continue;
+            }
+
+            if (inSnapshot &&
+                line.rfind("SENSOR|", 0) == 0)
+            {
+                BridgeSensorReading reading;
+
+                if (parseBridgeSensorLine(line, reading))
+                {
+                    current.push_back(reading);
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
+bool startHardwareSensorBridge()
+{
+    if (
+        sensorBridgeProcess != nullptr &&
+        WaitForSingleObject(sensorBridgeProcess, 0) == WAIT_TIMEOUT
+    )
+    {
+        return true;
+    }
+
+    stopHardwareSensorBridge();
+
+    std::string helperPath = findSensorHelperPath();
+
+    if (helperPath.empty())
+    {
+        return false;
+    }
+
+    SECURITY_ATTRIBUTES security = {};
+    security.nLength = sizeof(security);
+    security.bInheritHandle = TRUE;
+
+    HANDLE readPipe = nullptr;
+    HANDLE writePipe = nullptr;
+
+    if (!CreatePipe(&readPipe, &writePipe, &security, 0))
+    {
+        return false;
+    }
+
+    if (!SetHandleInformation(
+            readPipe,
+            HANDLE_FLAG_INHERIT,
+            0
+        ))
+    {
+        CloseHandle(readPipe);
+        CloseHandle(writePipe);
+        return false;
+    }
+
+    STARTUPINFOA startup = {};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdOutput = writePipe;
+    startup.hStdError = writePipe;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+
+    PROCESS_INFORMATION process = {};
+    std::string command = "\"" + helperPath + "\"";
+    std::vector<char> commandLine(command.begin(), command.end());
+    commandLine.push_back('\0');
+
+    BOOL created = CreateProcessA(
+        nullptr,
+        commandLine.data(),
+        nullptr,
+        nullptr,
+        TRUE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        nullptr,
+        &startup,
+        &process
+    );
+
+    CloseHandle(writePipe);
+
+    if (!created)
+    {
+        CloseHandle(readPipe);
+        return false;
+    }
+
+    if (!sensorBridgeLockInitialized)
+    {
+        InitializeCriticalSection(&sensorBridgeLock);
+        sensorBridgeLockInitialized = true;
+    }
+
+    EnterCriticalSection(&sensorBridgeLock);
+    latestSensorSnapshot = BridgeSnapshot();
+    LeaveCriticalSection(&sensorBridgeLock);
+
+    InterlockedExchange(&sensorBridgeStopRequested, 0);
+
+    sensorBridgeProcess = process.hProcess;
+    sensorBridgeReadPipe = readPipe;
+    CloseHandle(process.hThread);
+
+    sensorBridgeReader = CreateThread(
+        nullptr,
+        0,
+        sensorBridgeReaderProc,
+        nullptr,
+        0,
+        nullptr
+    );
+
+    if (sensorBridgeReader == nullptr)
+    {
+        TerminateProcess(sensorBridgeProcess, 1);
+        WaitForSingleObject(sensorBridgeProcess, 2000);
+        CloseHandle(sensorBridgeReadPipe);
+        CloseHandle(sensorBridgeProcess);
+        sensorBridgeReadPipe = nullptr;
+        sensorBridgeProcess = nullptr;
+        return false;
+    }
+
+    return true;
+}
+
+void stopHardwareSensorBridge()
+{
+    InterlockedExchange(&sensorBridgeStopRequested, 1);
+
+    if (sensorBridgeProcess != nullptr)
+    {
+        if (WaitForSingleObject(sensorBridgeProcess, 0) == WAIT_TIMEOUT)
+        {
+            TerminateProcess(sensorBridgeProcess, 0);
+        }
+
+        WaitForSingleObject(sensorBridgeProcess, 2000);
+    }
+
+    if (sensorBridgeReader != nullptr)
+    {
+        DWORD waitResult = WaitForSingleObject(
+            sensorBridgeReader,
+            2000
+        );
+
+        if (waitResult == WAIT_TIMEOUT &&
+            sensorBridgeReadPipe != nullptr)
+        {
+            CloseHandle(sensorBridgeReadPipe);
+            sensorBridgeReadPipe = nullptr;
+            WaitForSingleObject(sensorBridgeReader, 1000);
+        }
+
+        CloseHandle(sensorBridgeReader);
+        sensorBridgeReader = nullptr;
+    }
+
+    if (sensorBridgeReadPipe != nullptr)
+    {
+        CloseHandle(sensorBridgeReadPipe);
+        sensorBridgeReadPipe = nullptr;
+    }
+
+    if (sensorBridgeProcess != nullptr)
+    {
+        CloseHandle(sensorBridgeProcess);
+        sensorBridgeProcess = nullptr;
+    }
+
+    if (sensorBridgeLockInitialized)
+    {
+        DeleteCriticalSection(&sensorBridgeLock);
+        sensorBridgeLockInitialized = false;
+    }
+
+    latestSensorSnapshot = BridgeSnapshot();
+}
+
+static int cpuTemperatureSensorPriority(const std::string& name)
+{
+    std::string upper = toUpperCopy(name);
+
+    if (upper.find("TCTL/TDIE") != std::string::npos)
+        return 100;
+    if (upper.find("CPU PACKAGE") != std::string::npos)
+        return 95;
+    if (upper == "PACKAGE" || upper.find("PACKAGE") != std::string::npos)
+        return 90;
+    if (upper.find("CPU DIE") != std::string::npos)
+        return 85;
+    if (upper.find("TDIE") != std::string::npos)
+        return 80;
+    if (upper.find("CCD") != std::string::npos)
+        return 70;
+    if (upper.find("CORE") != std::string::npos)
+        return 60;
+    return 50;
+}
+
+static int parsePhysicalCoreTemperatureIndex(const std::string& name)
+{
+    std::string upper = toUpperCopy(name);
+    size_t marker = upper.find("CORE #");
+    size_t numberStart = std::string::npos;
+    bool oneBased = false;
+
+    if (marker != std::string::npos)
+    {
+        numberStart = marker + 6;
+        oneBased = true;
+    }
+    else
+    {
+        marker = upper.find("CORE ");
+        if (marker != std::string::npos)
+        {
+            numberStart = marker + 5;
+        }
+    }
+
+    if (numberStart == std::string::npos)
+    {
+        return -1;
+    }
+
+    while (
+        numberStart < upper.size() &&
+        !std::isdigit(
+            static_cast<unsigned char>(upper[numberStart])
+        )
+    )
+    {
+        numberStart++;
+    }
+
+    if (numberStart >= upper.size())
+    {
+        return -1;
+    }
+
+    int number = 0;
+    while (
+        numberStart < upper.size() &&
+        std::isdigit(
+            static_cast<unsigned char>(upper[numberStart])
+        )
+    )
+    {
+        number = number * 10 + (upper[numberStart] - '0');
+        numberStart++;
+    }
+
+    if (oneBased)
+    {
+        if (number <= 0)
+            return -1;
+        return number - 1;
+    }
+
+    return number;
 }
 
 
@@ -6217,6 +6941,424 @@ void refreshNetworkStats(bool force)
     {
         refreshActiveConnections();
         lastNetworkConnectionTick = now;
+    }
+}
+
+
+void refreshTemperatureStats(bool force)
+{
+    static ULONGLONG lastRefreshTick = 0;
+    static ULONGLONG lastBridgeStartAttempt = 0;
+
+    ULONGLONG now = GetTickCount64();
+
+    if (
+        !force &&
+        lastRefreshTick != 0 &&
+        now - lastRefreshTick < 500
+    )
+    {
+        return;
+    }
+
+    lastRefreshTick = now;
+
+    temperatureStats.acpiAvailable = false;
+    temperatureStats.hardwareSensorAvailable = false;
+    temperatureStats.cpuTemperatureC = -1.0;
+    temperatureStats.motherboardTemperatureC = -1.0;
+    temperatureStats.systemTemperatureC = -1.0;
+    temperatureStats.cpuPackagePowerW = -1.0;
+    temperatureStats.cpuAverageClockMHz = -1.0;
+    temperatureStats.cpuSensorName = "--";
+    temperatureStats.motherboardSensorName = "--";
+    temperatureStats.cpuSensorGeneric = false;
+    temperatureStats.motherboardSensorGeneric = false;
+    temperatureStats.cpuSensorFromHardware = false;
+    temperatureStats.motherboardSensorFromHardware = false;
+    temperatureStats.sensors.clear();
+    temperatureStats.cpuSensors.clear();
+    temperatureStats.motherboardSensors.clear();
+
+    int physicalCoreCount = systemInfo.cpuCores;
+    if (physicalCoreCount < 0)
+    {
+        physicalCoreCount = 0;
+    }
+
+    temperatureStats.cpuCoreTemperatures.assign(
+        static_cast<size_t>(physicalCoreCount),
+        -1.0
+    );
+
+    // --------------------------------------------------------
+    // Real hardware sensors from the bundled SysMonSensors
+    // helper. These are preferred over generic Windows ACPI
+    // thermal zones for CPU package/core temperature.
+    // --------------------------------------------------------
+    BridgeSnapshot snapshot;
+    bool bridgeFresh = copyBridgeSnapshot(snapshot);
+
+    if (!bridgeFresh &&
+        (lastBridgeStartAttempt == 0 ||
+         now - lastBridgeStartAttempt >= 5000))
+    {
+        lastBridgeStartAttempt = now;
+        startHardwareSensorBridge();
+        bridgeFresh = copyBridgeSnapshot(snapshot);
+    }
+
+    temperatureStats.hardwareSensorAvailable = bridgeFresh;
+
+    int bestCpuTemperaturePriority = -1;
+
+    if (bridgeFresh)
+    {
+        for (const BridgeSensorReading& reading : snapshot.sensors)
+        {
+            std::string hardwareType =
+                toUpperCopy(reading.hardwareType);
+            std::string sensorType =
+                toUpperCopy(reading.sensorType);
+            std::string sensorNameUpper =
+                toUpperCopy(reading.sensorName);
+
+            bool cpuHardware =
+                hardwareType == "CPU";
+
+            bool motherboardHardware =
+                hardwareType == "SUPERIO" ||
+                hardwareType == "MOTHERBOARD" ||
+                hardwareType == "EMBEDDEDCONTROLLER";
+
+            if (cpuHardware &&
+                sensorType == "TEMPERATURE" &&
+                reading.value > 0.0 &&
+                reading.value <= 150.0)
+            {
+                ThermalSensorInfo sensor;
+                sensor.name = reading.sensorName;
+                sensor.category = "CPU";
+                sensor.temperatureC = reading.value;
+
+                temperatureStats.cpuSensors.push_back(sensor);
+
+                int coreIndex =
+                    parsePhysicalCoreTemperatureIndex(
+                        reading.sensorName
+                    );
+
+                if (coreIndex >= 0)
+                {
+                    if (
+                        coreIndex >=
+                        static_cast<int>(
+                            temperatureStats.
+                                cpuCoreTemperatures.size()
+                        )
+                    )
+                    {
+                        temperatureStats.
+                            cpuCoreTemperatures.resize(
+                                static_cast<size_t>(
+                                    coreIndex + 1
+                                ),
+                                -1.0
+                            );
+                    }
+
+                    temperatureStats.
+                        cpuCoreTemperatures[
+                            static_cast<size_t>(coreIndex)
+                        ] = reading.value;
+                }
+
+                int priority =
+                    cpuTemperatureSensorPriority(
+                        reading.sensorName
+                    );
+
+                if (priority >
+                    bestCpuTemperaturePriority)
+                {
+                    bestCpuTemperaturePriority = priority;
+                    temperatureStats.cpuTemperatureC =
+                        reading.value;
+                    temperatureStats.cpuSensorName =
+                        reading.sensorName;
+                    temperatureStats.cpuSensorFromHardware = true;
+                }
+            }
+            else if (
+                cpuHardware &&
+                sensorType == "POWER" &&
+                (
+                    sensorNameUpper == "PACKAGE" ||
+                    sensorNameUpper.find(
+                        "CPU PACKAGE"
+                    ) != std::string::npos
+                ) &&
+                reading.value >= 0.0
+            )
+            {
+                temperatureStats.cpuPackagePowerW =
+                    reading.value;
+            }
+            else if (
+                cpuHardware &&
+                sensorType == "CLOCK" &&
+                sensorNameUpper == "CORES (AVERAGE)" &&
+                reading.value > 0.0
+            )
+            {
+                temperatureStats.cpuAverageClockMHz =
+                    reading.value;
+            }
+            else if (
+                motherboardHardware &&
+                sensorType == "TEMPERATURE" &&
+                reading.value > -20.0 &&
+                reading.value <= 150.0
+            )
+            {
+                ThermalSensorInfo sensor;
+                sensor.name = reading.sensorName;
+                sensor.category = reading.hardwareType;
+                sensor.temperatureC = reading.value;
+
+                temperatureStats.
+                    motherboardSensors.push_back(sensor);
+
+                if (
+                    temperatureStats.
+                        motherboardTemperatureC < 0.0 ||
+                    reading.value >
+                        temperatureStats.
+                            motherboardTemperatureC
+                )
+                {
+                    temperatureStats.
+                        motherboardTemperatureC =
+                            reading.value;
+                    temperatureStats.
+                        motherboardSensorName =
+                            reading.sensorName;
+                    temperatureStats.
+                        motherboardSensorFromHardware = true;
+                }
+            }
+        }
+    }
+
+    // --------------------------------------------------------
+    // Windows ACPI thermal zones. Keep these as additional
+    // sensors/fallbacks, but never pretend an unidentified ACPI
+    // zone is a CPU package or a CPU core temperature.
+    // --------------------------------------------------------
+    ThermalPdhState& state = getThermalPdhState();
+    PdhFunctions& pdh = getPdhFunctions();
+
+    std::vector<std::pair<std::wstring, double>> values;
+
+    if (
+        state.query != nullptr &&
+        state.temperature != nullptr &&
+        pdh.valid() &&
+        pdh.collectQueryData(state.query) == ERROR_SUCCESS
+    )
+    {
+        values = readPdhCounterArray(state.temperature);
+    }
+
+    int cpuAcpiSensorIndex = -1;
+    int motherboardAcpiSensorIndex = -1;
+    int hottestAcpiSensorIndex = -1;
+
+    for (const auto& item : values)
+    {
+        double celsius = item.second - 273.15;
+
+        if (celsius < -20.0 || celsius > 150.0)
+        {
+            continue;
+        }
+
+        ThermalSensorInfo sensor;
+        sensor.name = wideToAnsi(item.first.c_str());
+
+        if (sensor.name.empty())
+        {
+            sensor.name = "Windows ACPI thermal zone";
+        }
+
+        sensor.temperatureC = celsius;
+
+        std::string upper = toUpperCopy(sensor.name);
+
+        bool cpuLike =
+            upper.find("CPU") != std::string::npos ||
+            upper.find("PROCESSOR") != std::string::npos ||
+            upper.find("PACKAGE") != std::string::npos ||
+            upper.find("PKG") != std::string::npos;
+
+        bool boardLike =
+            upper.find("BOARD") != std::string::npos ||
+            upper.find("MAIN") != std::string::npos ||
+            upper.find("MOTHER") != std::string::npos ||
+            upper.find("SYSTEM") != std::string::npos;
+
+        if (cpuLike)
+            sensor.category = "CPU";
+        else if (boardLike)
+            sensor.category = "Motherboard";
+        else
+            sensor.category = "ACPI";
+
+        temperatureStats.sensors.push_back(sensor);
+
+        int index =
+            static_cast<int>(
+                temperatureStats.sensors.size()
+            ) - 1;
+
+        if (
+            hottestAcpiSensorIndex < 0 ||
+            celsius >
+                temperatureStats.sensors[
+                    hottestAcpiSensorIndex
+                ].temperatureC
+        )
+        {
+            hottestAcpiSensorIndex = index;
+        }
+
+        if (
+            cpuLike &&
+            (
+                cpuAcpiSensorIndex < 0 ||
+                celsius >
+                    temperatureStats.sensors[
+                        cpuAcpiSensorIndex
+                    ].temperatureC
+            )
+        )
+        {
+            cpuAcpiSensorIndex = index;
+        }
+
+        if (
+            boardLike &&
+            (
+                motherboardAcpiSensorIndex < 0 ||
+                celsius >
+                    temperatureStats.sensors[
+                        motherboardAcpiSensorIndex
+                    ].temperatureC
+            )
+        )
+        {
+            motherboardAcpiSensorIndex = index;
+        }
+    }
+
+    temperatureStats.acpiAvailable =
+        !temperatureStats.sensors.empty();
+
+    // Use an explicitly CPU-named ACPI zone only when no real
+    // CPU sensor was supplied by the hardware backend.
+    if (
+        temperatureStats.cpuTemperatureC < 0.0 &&
+        cpuAcpiSensorIndex >= 0
+    )
+    {
+        temperatureStats.cpuTemperatureC =
+            temperatureStats.sensors[
+                cpuAcpiSensorIndex
+            ].temperatureC;
+        temperatureStats.cpuSensorName =
+            temperatureStats.sensors[
+                cpuAcpiSensorIndex
+            ].name;
+        temperatureStats.cpuSensorGeneric = false;
+    }
+
+    // Motherboard sensors from Super-I/O are preferred. If they
+    // are unavailable, fall back to an identified board ACPI zone,
+    // then the hottest generic ACPI zone while marking it generic.
+    if (temperatureStats.motherboardTemperatureC < 0.0)
+    {
+        if (motherboardAcpiSensorIndex >= 0)
+        {
+            temperatureStats.motherboardTemperatureC =
+                temperatureStats.sensors[
+                    motherboardAcpiSensorIndex
+                ].temperatureC;
+            temperatureStats.motherboardSensorName =
+                temperatureStats.sensors[
+                    motherboardAcpiSensorIndex
+                ].name;
+        }
+        else if (hottestAcpiSensorIndex >= 0)
+        {
+            temperatureStats.motherboardTemperatureC =
+                temperatureStats.sensors[
+                    hottestAcpiSensorIndex
+                ].temperatureC;
+            temperatureStats.motherboardSensorName =
+                temperatureStats.sensors[
+                    hottestAcpiSensorIndex
+                ].name;
+            temperatureStats.motherboardSensorGeneric = true;
+        }
+    }
+
+    // Hottest available system sensor for the Dashboard card.
+    auto considerSystemTemperature =
+        [&](double value)
+    {
+        if (
+            value >= -20.0 &&
+            value <= 150.0 &&
+            (
+                temperatureStats.systemTemperatureC < 0.0 ||
+                value > temperatureStats.systemTemperatureC
+            )
+        )
+        {
+            temperatureStats.systemTemperatureC = value;
+        }
+    };
+
+    considerSystemTemperature(
+        temperatureStats.cpuTemperatureC
+    );
+    considerSystemTemperature(
+        temperatureStats.motherboardTemperatureC
+    );
+
+    if (hottestAcpiSensorIndex >= 0)
+    {
+        considerSystemTemperature(
+            temperatureStats.sensors[
+                hottestAcpiSensorIndex
+            ].temperatureC
+        );
+    }
+
+    if (temperatureStats.cpuTemperatureC >= 0.0)
+    {
+        pushGpuHistory(
+            temperatureStats.cpuTemperatureHistory,
+            temperatureStats.cpuTemperatureC
+        );
+    }
+
+    if (temperatureStats.motherboardTemperatureC >= 0.0)
+    {
+        pushGpuHistory(
+            temperatureStats.motherboardTemperatureHistory,
+            temperatureStats.motherboardTemperatureC
+        );
     }
 }
 
@@ -6372,6 +7514,7 @@ void updateStats()
     cpuUsage =
         getCpuUsage();
 
+    updateCpuCoreUsageInternal();
     addCpuHistorySample();
 
 
@@ -6454,14 +7597,18 @@ void updateStats()
     refreshGpuStats(false);
 
 
+    // System / hardware overview. Static information is cached.
+    // Refresh this before temperatures so the sensor UI already
+    // knows the physical-core count for the current CPU.
+    refreshSystemInfo(false);
+
+
+    // Real hardware sensors from SysMonSensors plus ACPI fallback.
+    refreshTemperatureStats(false);
+
+
     // Network performance and adapter hot-plug detection.
     refreshNetworkStats(false);
-
-
-    // System / hardware overview and connected-device refresh.
-    // Static information is cached; network and device data refresh
-    // every five seconds.
-    refreshSystemInfo(false);
 
 
     // Uptime

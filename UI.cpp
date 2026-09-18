@@ -2049,12 +2049,16 @@ case AppPage::Performance:
     activeTop = 225;
     break;
 
-case AppPage::SystemInfo:
+case AppPage::Temperatures:
     activeTop = 275;
     break;
 
-case AppPage::Settings:
+case AppPage::SystemInfo:
     activeTop = 325;
+    break;
+
+case AppPage::Settings:
+    activeTop = 375;
     break;
 }
 
@@ -2110,9 +2114,20 @@ drawText(
 
 drawText(
     hdc,
-    "About PC",
+    "Temperatures",
     55,
     295,
+    currentPage == AppPage::Temperatures
+    ? textPrimary
+    : textSecondary,
+    labelFont
+);
+
+drawText(
+    hdc,
+    "About PC",
+    55,
+    345,
    currentPage == AppPage::SystemInfo
     ? textPrimary
     : textSecondary,
@@ -2123,7 +2138,7 @@ drawText(
     hdc,
     "Settings",
     55,
-    345,
+    395,
     currentPage == AppPage::Settings
     ? textPrimary
     : textSecondary,
@@ -2165,6 +2180,11 @@ if (currentPage != AppPage::Dashboard)
         pageSubtitle = "Real-time performance and resource usage.";
         break;
 
+    case AppPage::Temperatures:
+        pageTitle = "Temperatures";
+        pageSubtitle = "Live CPU, GPU, and firmware thermal monitoring.";
+        break;
+
     case AppPage::SystemInfo:
         pageTitle = "About";
         pageSubtitle = "Detailed information about your computer hardware and software.";
@@ -2198,6 +2218,7 @@ if (currentPage != AppPage::Dashboard)
     );
 
  if (currentPage != AppPage::Performance &&
+    currentPage != AppPage::Temperatures &&
     currentPage != AppPage::SystemInfo)
 {
     drawRoundedBox(
@@ -4166,6 +4187,1942 @@ else if (currentPage == AppPage::SystemInfo)
         );
     }
 }
+
+else if (currentPage == AppPage::Temperatures)
+{
+    const COLORREF tempCard =
+        RGB(24, 27, 34);
+
+    const COLORREF tempPanel =
+        RGB(20, 24, 30);
+
+    const COLORREF cpuBlue =
+        RGB(45, 150, 245);
+
+    const COLORREF gpuPurple =
+        RGB(165, 55, 235);
+
+    const COLORREF boardOrange =
+        RGB(220, 140, 55);
+
+    auto shortText =
+        [](const std::string& value,
+           size_t maximum)
+        -> std::string
+    {
+        if (value.size() <= maximum)
+        {
+            return value;
+        }
+
+        if (maximum <= 3)
+        {
+            return value.substr(0, maximum);
+        }
+
+        return
+            value.substr(0, maximum - 3) +
+            "...";
+    };
+
+    auto formatTemperature =
+        [](double value)
+        -> std::string
+    {
+        if (value < 0.0)
+        {
+            return "-- C";
+        }
+
+        std::ostringstream stream;
+        stream
+            << std::fixed
+            << std::setprecision(1)
+            << value
+            << " C";
+
+        return stream.str();
+    };
+
+    auto drawTemperatureTab =
+        [&](int left,
+            int right,
+            const std::string& text,
+            bool selected,
+            COLORREF accent)
+    {
+        drawRoundedBox(
+            hdc,
+            left,
+            115,
+            right,
+            170,
+            selected
+                ? RGB(31, 49, 67)
+                : tempCard
+        );
+
+        if (selected)
+        {
+            drawRoundedBox(
+                hdc,
+                left,
+                115,
+                left + 5,
+                170,
+                accent
+            );
+        }
+
+        drawText(
+            hdc,
+            text,
+            left + 18,
+            133,
+            selected
+                ? textPrimary
+                : textSecondary,
+            labelFont
+        );
+    };
+
+    drawTemperatureTab(
+        35,
+        185,
+        "CPU",
+        temperatureView ==
+            TemperatureView::CPU,
+        cpuBlue
+    );
+
+    drawTemperatureTab(
+        200,
+        350,
+        "GPU",
+        temperatureView ==
+            TemperatureView::GPU,
+        gpuPurple
+    );
+
+    drawTemperatureTab(
+        365,
+        540,
+        "Motherboard",
+        temperatureView ==
+            TemperatureView::Motherboard,
+        boardOrange
+    );
+
+
+    // --------------------------------------------------------
+    // CPU TEMPERATURE VIEW
+    // --------------------------------------------------------
+    if (temperatureView == TemperatureView::CPU)
+    {
+        drawText(
+            hdc,
+            "CPU",
+            35,
+            185,
+            textPrimary,
+            titleFont
+        );
+
+        drawText(
+            hdc,
+            "Real-time CPU performance, temperature, and utilization.",
+            37,
+            216,
+            textSecondary,
+            smallFont
+        );
+
+        const int summaryTop = 235;
+        const int summaryBottom = 300;
+
+        auto drawCpuSummary =
+            [&](int left,
+                int right,
+                const std::string& label,
+                const std::string& value,
+                COLORREF accent)
+        {
+            drawRoundedBox(
+                hdc,
+                left,
+                summaryTop,
+                right,
+                summaryBottom,
+                tempCard
+            );
+
+            drawRoundedBox(
+                hdc,
+                left + 12,
+                summaryTop + 14,
+                left + 17,
+                summaryBottom - 14,
+                accent
+            );
+
+            drawText(
+                hdc,
+                label,
+                left + 28,
+                summaryTop + 10,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                value,
+                left + 28,
+                summaryTop + 32,
+                textPrimary,
+                labelFont
+            );
+        };
+
+        std::ostringstream utilization;
+        utilization
+            << std::fixed
+            << std::setprecision(0)
+            << cpuUsage
+            << "%";
+
+        drawCpuSummary(
+            35,
+            240,
+            "Utilization",
+            utilization.str(),
+            cpuBlue
+        );
+
+        drawCpuSummary(
+            250,
+            455,
+            "Temperature",
+            formatTemperature(
+                temperatureStats.cpuTemperatureC
+            ),
+            cpuBlue
+        );
+
+        std::string currentSpeed =
+            systemInfo.cpuCurrentSpeed;
+
+        if (temperatureStats.cpuAverageClockMHz > 0.0)
+        {
+            std::ostringstream clockStream;
+
+            if (temperatureStats.cpuAverageClockMHz >= 1000.0)
+            {
+                clockStream
+                    << std::fixed
+                    << std::setprecision(2)
+                    << (temperatureStats.cpuAverageClockMHz / 1000.0)
+                    << " GHz";
+            }
+            else
+            {
+                clockStream
+                    << std::fixed
+                    << std::setprecision(0)
+                    << temperatureStats.cpuAverageClockMHz
+                    << " MHz";
+            }
+
+            currentSpeed = clockStream.str();
+        }
+        else if (currentSpeed.empty() ||
+                 currentSpeed == "--")
+        {
+            currentSpeed =
+                systemInfo.cpuBaseSpeed;
+        }
+
+        drawCpuSummary(
+            465,
+            670,
+            "Clock Speed",
+            currentSpeed,
+            cpuBlue
+        );
+
+        std::string powerUsage = "-- W";
+
+        if (temperatureStats.cpuPackagePowerW >= 0.0)
+        {
+            std::ostringstream powerStream;
+            powerStream
+                << std::fixed
+                << std::setprecision(1)
+                << temperatureStats.cpuPackagePowerW
+                << " W";
+            powerUsage = powerStream.str();
+        }
+
+        drawCpuSummary(
+            680,
+            915,
+            "Power Usage",
+            powerUsage,
+            cpuBlue
+        );
+
+        // Main temperature graph.
+        drawRoundedBox(
+            hdc,
+            35,
+            315,
+            650,
+            505,
+            tempCard
+        );
+
+        drawText(
+            hdc,
+            "CPU Temperature",
+            55,
+            330,
+            textPrimary,
+            labelFont
+        );
+
+        std::string currentText =
+            formatTemperature(
+                temperatureStats.cpuTemperatureC
+            );
+
+        drawText(
+            hdc,
+            "Current: " + currentText,
+            425,
+            332,
+            cpuBlue,
+            smallFont
+        );
+
+        if (!temperatureStats.
+                cpuTemperatureHistory.empty())
+        {
+            auto minimum =
+                std::min_element(
+                    temperatureStats.
+                        cpuTemperatureHistory.begin(),
+                    temperatureStats.
+                        cpuTemperatureHistory.end()
+                );
+
+            auto maximum =
+                std::max_element(
+                    temperatureStats.
+                        cpuTemperatureHistory.begin(),
+                    temperatureStats.
+                        cpuTemperatureHistory.end()
+                );
+
+            drawText(
+                hdc,
+                "Min: " +
+                    formatTemperature(*minimum),
+                515,
+                332,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "Max: " +
+                    formatTemperature(*maximum),
+                585,
+                332,
+                textSecondary,
+                smallFont
+            );
+        }
+
+        drawText(
+            hdc,
+            "100 C",
+            48,
+            355,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "50 C",
+            52,
+            411,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "0 C",
+            58,
+            467,
+            textSecondary,
+            smallFont
+        );
+
+        drawDiskHistoryGraph(
+            hdc,
+            88,
+            355,
+            540,
+            115,
+            temperatureStats.cpuTemperatureHistory,
+            100.0,
+            cpuBlue,
+            RGB(24, 48, 74)
+        );
+
+        drawText(
+            hdc,
+            "60 seconds ago",
+            88,
+            474,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Now",
+            600,
+            474,
+            textSecondary,
+            smallFont
+        );
+
+        if (temperatureStats.cpuTemperatureC < 0.0)
+        {
+            drawText(
+                hdc,
+                temperatureStats.hardwareSensorAvailable
+                    ? "The sensor engine is connected, but this CPU did not expose a package temperature."
+                    : "Hardware sensor engine unavailable - CPU temperature cannot be read yet.",
+                115,
+                407,
+                textSecondary,
+                smallFont
+            );
+        }
+
+        // Temperature details.  Core rows are generated from the
+        // detected physical-core count. A value is filled only when
+        // the CPU exposes a genuine per-core temperature sensor.
+        drawRoundedBox(
+            hdc,
+            665,
+            315,
+            915,
+            505,
+            tempCard
+        );
+
+        drawText(
+            hdc,
+            "Temperature Details",
+            685,
+            330,
+            textPrimary,
+            labelFont
+        );
+
+        int physicalCoreCount =
+            systemInfo.cpuCores;
+
+        if (
+            static_cast<int>(
+                temperatureStats.cpuCoreTemperatures.size()
+            ) > physicalCoreCount
+        )
+        {
+            physicalCoreCount =
+                static_cast<int>(
+                    temperatureStats.cpuCoreTemperatures.size()
+                );
+        }
+
+        if (physicalCoreCount < 0)
+        {
+            physicalCoreCount = 0;
+        }
+
+        int visibleCoreCount =
+            physicalCoreCount;
+
+        if (visibleCoreCount > 16)
+        {
+            visibleCoreCount = 16;
+        }
+
+        int rowsPerColumn =
+            visibleCoreCount > 0
+            ? (visibleCoreCount + 1) / 2
+            : 0;
+
+        if (rowsPerColumn > 8)
+        {
+            rowsPerColumn = 8;
+        }
+
+        for (int index = 0;
+             index < visibleCoreCount;
+             index++)
+        {
+            int column =
+                index / rowsPerColumn;
+            int row =
+                index % rowsPerColumn;
+
+            int labelX =
+                column == 0 ? 685 : 805;
+            int valueX =
+                column == 0 ? 750 : 870;
+            int rowY =
+                358 + row * 18;
+
+            drawText(
+                hdc,
+                "Core " + std::to_string(index),
+                labelX,
+                rowY,
+                textSecondary,
+                smallFont
+            );
+
+            double coreTemperature = -1.0;
+
+            if (
+                index <
+                static_cast<int>(
+                    temperatureStats.
+                        cpuCoreTemperatures.size()
+                )
+            )
+            {
+                coreTemperature =
+                    temperatureStats.
+                        cpuCoreTemperatures[
+                            static_cast<size_t>(index)
+                        ];
+            }
+
+            drawText(
+                hdc,
+                formatTemperature(coreTemperature),
+                valueX,
+                rowY,
+                coreTemperature >= 0.0
+                    ? cpuBlue
+                    : textSecondary,
+                smallFont
+            );
+        }
+
+        int detailY =
+            358 + rowsPerColumn * 18 + 6;
+
+        // On CPUs with fewer cores, use the remaining space for
+        // package/die/CCD readings supplied by the hardware backend.
+        for (
+            size_t sensorIndex = 0;
+            sensorIndex < temperatureStats.cpuSensors.size() &&
+            detailY <= 476;
+            sensorIndex++
+        )
+        {
+            const ThermalSensorInfo& sensor =
+                temperatureStats.cpuSensors[sensorIndex];
+
+            std::string upperName = sensor.name;
+            std::transform(
+                upperName.begin(),
+                upperName.end(),
+                upperName.begin(),
+                [](unsigned char ch)
+                {
+                    return static_cast<char>(
+                        std::toupper(ch)
+                    );
+                }
+            );
+
+            // Per-core sensors are already represented by the Core
+            // rows above. Keep the lower rows for package/die/CCD.
+            if (upperName.find("CORE #") !=
+                std::string::npos)
+            {
+                continue;
+            }
+
+            drawText(
+                hdc,
+                shortText(sensor.name, 17),
+                685,
+                detailY,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                formatTemperature(sensor.temperatureC),
+                835,
+                detailY,
+                cpuBlue,
+                smallFont
+            );
+
+            detailY += 18;
+        }
+
+        // Keep Windows/firmware ACPI zones underneath the real CPU
+        // sensors exactly as additional readings, not as fake cores.
+        if (
+            !temperatureStats.sensors.empty() &&
+            detailY <= 476
+        )
+        {
+            const ThermalSensorInfo& acpiSensor =
+                temperatureStats.sensors.front();
+
+            drawText(
+                hdc,
+                shortText(acpiSensor.name, 17),
+                685,
+                detailY,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                formatTemperature(acpiSensor.temperatureC),
+                835,
+                detailY,
+                boardOrange,
+                smallFont
+            );
+        }
+
+        if (physicalCoreCount > visibleCoreCount)
+        {
+            drawText(
+                hdc,
+                "+" +
+                    std::to_string(
+                        physicalCoreCount - visibleCoreCount
+                    ) +
+                    " more cores",
+                805,
+                488,
+                textSecondary,
+                smallFont
+            );
+        }
+
+        // CPU information.
+        drawRoundedBox(
+            hdc,
+            35,
+            520,
+            300,
+            680,
+            tempCard
+        );
+
+        drawText(
+            hdc,
+            "CPU Information",
+            55,
+            535,
+            textPrimary,
+            labelFont
+        );
+
+        int cpuInfoY = 565;
+        const int cpuInfoGap = 20;
+
+        auto drawCpuInfo =
+            [&](const std::string& label,
+                const std::string& value)
+        {
+            drawText(
+                hdc,
+                label,
+                55,
+                cpuInfoY,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                shortText(value, 21),
+                140,
+                cpuInfoY,
+                textPrimary,
+                smallFont
+            );
+
+            cpuInfoY += cpuInfoGap;
+        };
+
+        drawCpuInfo(
+            "Name:",
+            systemInfo.cpuName
+        );
+        drawCpuInfo(
+            "Cores:",
+            std::to_string(
+                systemInfo.cpuCores
+            )
+        );
+        drawCpuInfo(
+            "Threads:",
+            std::to_string(
+                systemInfo.cpuThreads
+            )
+        );
+        drawCpuInfo(
+            "Base:",
+            systemInfo.cpuBaseSpeed
+        );
+        drawCpuInfo(
+            "Socket:",
+            systemInfo.cpuSocket
+        );
+
+        // Per logical processor utilization.
+        drawRoundedBox(
+            hdc,
+            315,
+            520,
+            610,
+            680,
+            tempCard
+        );
+
+        drawText(
+            hdc,
+            "Utilization per Logical CPU",
+            335,
+            535,
+            textPrimary,
+            labelFont
+        );
+
+        int logicalCount =
+            (std::min)(
+                6,
+                static_cast<int>(
+                    cpuCoreUsage.size()
+                )
+            );
+
+        for (int index = 0;
+             index < logicalCount;
+             index++)
+        {
+            int rowY =
+                565 +
+                index * 18;
+
+            drawText(
+                hdc,
+                "CPU " +
+                    std::to_string(index),
+                335,
+                rowY,
+                textSecondary,
+                smallFont
+            );
+
+            drawRoundedBox(
+                hdc,
+                395,
+                rowY + 3,
+                535,
+                rowY + 12,
+                RGB(37, 46, 56)
+            );
+
+            int fillWidth =
+                static_cast<int>(
+                    140.0 *
+                    cpuCoreUsage[index] /
+                    100.0
+                );
+
+            if (fillWidth > 0)
+            {
+                drawRoundedBox(
+                    hdc,
+                    395,
+                    rowY + 3,
+                    395 + fillWidth,
+                    rowY + 12,
+                    cpuBlue
+                );
+            }
+
+            std::ostringstream corePercent;
+            corePercent
+                << std::fixed
+                << std::setprecision(0)
+                << cpuCoreUsage[index]
+                << "%";
+
+            drawText(
+                hdc,
+                corePercent.str(),
+                550,
+                rowY,
+                textPrimary,
+                smallFont
+            );
+        }
+
+        if (
+            static_cast<int>(
+                cpuCoreUsage.size()
+            ) > logicalCount
+        )
+        {
+            drawText(
+                hdc,
+                "+" +
+                    std::to_string(
+                        static_cast<int>(
+                            cpuCoreUsage.size()
+                        ) - logicalCount
+                    ) +
+                    " more logical CPUs",
+                335,
+                665,
+                textSecondary,
+                smallFont
+            );
+        }
+
+        // Thermal status.
+        drawRoundedBox(
+            hdc,
+            625,
+            520,
+            915,
+            680,
+            tempCard
+        );
+
+        drawText(
+            hdc,
+            "Thermal Status",
+            645,
+            535,
+            textPrimary,
+            labelFont
+        );
+
+        if (temperatureStats.cpuTemperatureC >= 0.0)
+        {
+            drawText(
+                hdc,
+                temperatureStats.cpuSensorFromHardware
+                    ? "LIVE HARDWARE SENSOR"
+                    : "LIVE ACPI SENSOR",
+                645,
+                575,
+                cpuBlue,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "Current:",
+                645,
+                610,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                currentText,
+                735,
+                610,
+                textPrimary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "Source:",
+                645,
+                640,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                shortText(
+                    temperatureStats.cpuSensorName,
+                    24
+                ),
+                700,
+                640,
+                textPrimary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                temperatureStats.cpuSensorFromHardware
+                    ? "Read by SysMon's hardware sensor engine."
+                    : "Read from a CPU-identified Windows ACPI thermal zone.",
+                645,
+                662,
+                textSecondary,
+                smallFont
+            );
+        }
+        else
+        {
+            drawText(
+                hdc,
+                temperatureStats.hardwareSensorAvailable
+                    ? "NO CPU TEMP SENSOR"
+                    : "SENSOR ENGINE OFFLINE",
+                645,
+                575,
+                textSecondary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                temperatureStats.hardwareSensorAvailable
+                    ? "The CPU did not expose a package/core temperature sensor."
+                    : "SysMonSensors is not providing hardware readings.",
+                645,
+                615,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "Unsupported readings stay as -- instead of being estimated.",
+                645,
+                642,
+                textSecondary,
+                smallFont
+            );
+        }
+    }
+
+
+    // --------------------------------------------------------
+    // GPU TEMPERATURE VIEW
+    // --------------------------------------------------------
+    else if (temperatureView == TemperatureView::GPU)
+    {
+        if (gpuStats.empty())
+        {
+            drawRoundedBox(
+                hdc,
+                35,
+                185,
+                915,
+                680,
+                tempCard
+            );
+
+            drawText(
+                hdc,
+                "GPU",
+                55,
+                205,
+                textPrimary,
+                titleFont
+            );
+
+            drawText(
+                hdc,
+                "No compatible GPU adapter was detected.",
+                55,
+                265,
+                textSecondary,
+                labelFont
+            );
+        }
+        else
+        {
+            if (
+                selectedTemperatureGpuIndex < 0 ||
+                selectedTemperatureGpuIndex >=
+                    static_cast<int>(
+                        gpuStats.size()
+                    )
+            )
+            {
+                selectedTemperatureGpuIndex = 0;
+            }
+
+            const GpuStats& gpu =
+                gpuStats[
+                    selectedTemperatureGpuIndex
+                ];
+
+            const double bytesPerGpuGB =
+                1024.0 * 1024.0 * 1024.0;
+
+            auto percentText =
+                [](double value)
+                -> std::string
+            {
+                std::ostringstream stream;
+                stream
+                    << std::fixed
+                    << std::setprecision(0)
+                    << value
+                    << "%";
+                return stream.str();
+            };
+
+            auto gpuMemoryText =
+                [&](unsigned long long used,
+                    unsigned long long total)
+                -> std::string
+            {
+                if (total == 0)
+                {
+                    return "--";
+                }
+
+                std::ostringstream stream;
+                stream
+                    << std::fixed
+                    << std::setprecision(1)
+                    << used / bytesPerGpuGB
+                    << " / "
+                    << total / bytesPerGpuGB
+                    << " GB";
+                return stream.str();
+            };
+
+            drawText(
+                hdc,
+                "GPU " +
+                    std::to_string(
+                        selectedTemperatureGpuIndex
+                    ),
+                35,
+                185,
+                textPrimary,
+                titleFont
+            );
+
+            drawText(
+                hdc,
+                "Real-time GPU performance, temperature, and memory usage.",
+                37,
+                216,
+                textSecondary,
+                smallFont
+            );
+
+            std::string gpuName =
+                shortText(
+                    gpu.name,
+                    42
+                );
+
+            SIZE gpuExtent = {};
+            setFont(hdc, labelFont);
+            GetTextExtentPoint32A(
+                hdc,
+                gpuName.c_str(),
+                static_cast<int>(
+                    gpuName.size()
+                ),
+                &gpuExtent
+            );
+
+            int gpuNameX =
+                890 - gpuExtent.cx;
+
+            if (gpuNameX < 575)
+            {
+                gpuNameX = 575;
+            }
+
+            drawText(
+                hdc,
+                gpuName,
+                gpuNameX,
+                192,
+                textSecondary,
+                labelFont
+            );
+
+            if (gpuStats.size() > 1)
+            {
+                drawRoundedBox(
+                    hdc,
+                    830,
+                    190,
+                    853,
+                    220,
+                    RGB(36, 42, 54)
+                );
+                drawText(
+                    hdc,
+                    "<",
+                    838,
+                    195,
+                    textPrimary,
+                    labelFont
+                );
+
+                drawRoundedBox(
+                    hdc,
+                    857,
+                    190,
+                    880,
+                    220,
+                    RGB(36, 42, 54)
+                );
+                drawText(
+                    hdc,
+                    ">",
+                    865,
+                    195,
+                    textPrimary,
+                    labelFont
+                );
+            }
+
+            const int gpuSummaryTop = 235;
+            const int gpuSummaryBottom = 300;
+
+            auto drawGpuSummary =
+                [&](int left,
+                    int right,
+                    const std::string& label,
+                    const std::string& value)
+            {
+                drawRoundedBox(
+                    hdc,
+                    left,
+                    gpuSummaryTop,
+                    right,
+                    gpuSummaryBottom,
+                    tempCard
+                );
+
+                drawRoundedBox(
+                    hdc,
+                    left + 12,
+                    gpuSummaryTop + 14,
+                    left + 17,
+                    gpuSummaryBottom - 14,
+                    gpuPurple
+                );
+
+                drawText(
+                    hdc,
+                    label,
+                    left + 28,
+                    gpuSummaryTop + 10,
+                    textSecondary,
+                    smallFont
+                );
+
+                drawText(
+                    hdc,
+                    value,
+                    left + 28,
+                    gpuSummaryTop + 32,
+                    textPrimary,
+                    labelFont
+                );
+            };
+
+            drawGpuSummary(
+                35,
+                240,
+                "Utilization",
+                percentText(
+                    gpu.utilizationPercent
+                )
+            );
+
+            drawGpuSummary(
+                250,
+                455,
+                "Temperature",
+                formatTemperature(
+                    gpu.temperatureC
+                )
+            );
+
+            drawGpuSummary(
+                465,
+                670,
+                "Memory Usage",
+                gpuMemoryText(
+                    gpu.dedicatedMemoryUsedBytes,
+                    gpu.dedicatedMemoryTotalBytes
+                )
+            );
+
+            std::string fanText = "--";
+            if (gpu.fanPercent >= 0)
+            {
+                fanText =
+                    std::to_string(
+                        gpu.fanPercent
+                    ) +
+                    "%";
+            }
+            else if (gpu.fanRpm >= 0)
+            {
+                fanText =
+                    std::to_string(
+                        gpu.fanRpm
+                    ) +
+                    " RPM";
+            }
+
+            drawGpuSummary(
+                680,
+                915,
+                "Fan Speed",
+                fanText
+            );
+
+            // Utilization graph.
+            drawRoundedBox(
+                hdc,
+                35,
+                315,
+                430,
+                465,
+                tempCard
+            );
+            drawText(
+                hdc,
+                "GPU Utilization",
+                55,
+                330,
+                textPrimary,
+                labelFont
+            );
+            drawDiskHistoryGraph(
+                hdc,
+                55,
+                360,
+                355,
+                85,
+                gpu.utilizationHistory,
+                100.0,
+                gpuPurple,
+                RGB(49, 26, 69)
+            );
+            drawText(
+                hdc,
+                "60 seconds ago",
+                55,
+                447,
+                textSecondary,
+                smallFont
+            );
+            drawText(
+                hdc,
+                "Now",
+                382,
+                447,
+                textSecondary,
+                smallFont
+            );
+
+            // Temperature graph.
+            drawRoundedBox(
+                hdc,
+                445,
+                315,
+                690,
+                465,
+                tempCard
+            );
+            drawText(
+                hdc,
+                "GPU Temperature",
+                465,
+                330,
+                textPrimary,
+                labelFont
+            );
+            drawDiskHistoryGraph(
+                hdc,
+                465,
+                360,
+                205,
+                85,
+                gpu.temperatureHistory,
+                100.0,
+                gpuPurple,
+                RGB(49, 26, 69)
+            );
+            drawText(
+                hdc,
+                "100 C",
+                620,
+                343,
+                textSecondary,
+                smallFont
+            );
+
+            if (gpu.temperatureC < 0.0)
+            {
+                drawText(
+                    hdc,
+                    "Sensor unavailable",
+                    500,
+                    397,
+                    textSecondary,
+                    smallFont
+                );
+            }
+
+            // GPU information.
+            drawRoundedBox(
+                hdc,
+                705,
+                315,
+                915,
+                610,
+                tempCard
+            );
+            drawText(
+                hdc,
+                "GPU Information",
+                725,
+                330,
+                textPrimary,
+                labelFont
+            );
+
+            int gpuInfoY = 365;
+            const int gpuInfoGap = 24;
+
+            auto drawGpuInfo =
+                [&](const std::string& label,
+                    const std::string& value)
+            {
+                drawText(
+                    hdc,
+                    label,
+                    725,
+                    gpuInfoY,
+                    textSecondary,
+                    smallFont
+                );
+
+                drawText(
+                    hdc,
+                    shortText(value, 17),
+                    815,
+                    gpuInfoY,
+                    textPrimary,
+                    smallFont
+                );
+
+                gpuInfoY += gpuInfoGap;
+            };
+
+            drawGpuInfo(
+                "Name:",
+                gpu.name
+            );
+            drawGpuInfo(
+                "Vendor:",
+                gpu.vendor
+            );
+            drawGpuInfo(
+                gpu.vendor == "NVIDIA"
+                    ? "CUDA cores:"
+                    : "Cores:",
+                gpu.computeCores
+            );
+            drawGpuInfo(
+                "Driver:",
+                gpu.driverVersion
+            );
+            drawGpuInfo(
+                "DirectX:",
+                gpu.directXVersion
+            );
+            drawGpuInfo(
+                "PCIe:",
+                gpu.busInterface
+            );
+
+            std::string powerText = "--";
+            if (gpu.powerW >= 0.0)
+            {
+                std::ostringstream power;
+                power
+                    << std::fixed
+                    << std::setprecision(0)
+                    << gpu.powerW
+                    << " W";
+
+                if (gpu.powerLimitW > 0.0)
+                {
+                    power
+                        << " / "
+                        << std::setprecision(0)
+                        << gpu.powerLimitW
+                        << " W";
+                }
+
+                powerText = power.str();
+            }
+
+            drawGpuInfo(
+                "Power:",
+                powerText
+            );
+
+            // Dedicated memory graph.
+            double dedicatedTotalGB =
+                gpu.dedicatedMemoryTotalBytes /
+                bytesPerGpuGB;
+
+            drawRoundedBox(
+                hdc,
+                35,
+                480,
+                430,
+                610,
+                tempCard
+            );
+            drawText(
+                hdc,
+                "Dedicated GPU Memory Usage",
+                55,
+                495,
+                textPrimary,
+                labelFont
+            );
+            drawDiskHistoryGraph(
+                hdc,
+                55,
+                525,
+                355,
+                65,
+                gpu.dedicatedMemoryHistory,
+                dedicatedTotalGB > 0.0
+                    ? dedicatedTotalGB
+                    : 1.0,
+                gpuPurple,
+                RGB(49, 26, 69)
+            );
+
+            // Shared memory graph.
+            double sharedTotalGB =
+                gpu.sharedMemoryTotalBytes /
+                bytesPerGpuGB;
+
+            drawRoundedBox(
+                hdc,
+                445,
+                480,
+                690,
+                610,
+                tempCard
+            );
+            drawText(
+                hdc,
+                "Shared GPU Memory Usage",
+                465,
+                495,
+                textPrimary,
+                labelFont
+            );
+            drawDiskHistoryGraph(
+                hdc,
+                465,
+                525,
+                205,
+                65,
+                gpu.sharedMemoryHistory,
+                sharedTotalGB > 0.0
+                    ? sharedTotalGB
+                    : 1.0,
+                gpuPurple,
+                RGB(49, 26, 69)
+            );
+
+            // GPU load footer.
+            drawRoundedBox(
+                hdc,
+                35,
+                625,
+                915,
+                680,
+                tempCard
+            );
+
+            drawText(
+                hdc,
+                "GPU Load",
+                55,
+                638,
+                textPrimary,
+                labelFont
+            );
+
+            drawText(
+                hdc,
+                "3D " +
+                    percentText(
+                        gpu.utilizationPercent
+                    ),
+                185,
+                642,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "Encode " +
+                    percentText(
+                        gpu.encodePercent
+                    ),
+                300,
+                642,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "Decode " +
+                    percentText(
+                        gpu.decodePercent
+                    ),
+                435,
+                642,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                "Dedicated " +
+                    gpuMemoryText(
+                        gpu.dedicatedMemoryUsedBytes,
+                        gpu.dedicatedMemoryTotalBytes
+                    ),
+                570,
+                642,
+                textSecondary,
+                smallFont
+            );
+        }
+    }
+
+
+    // --------------------------------------------------------
+    // MOTHERBOARD / SYSTEM TEMPERATURE VIEW
+    // --------------------------------------------------------
+    else
+    {
+        drawText(
+            hdc,
+            "Motherboard / System",
+            35,
+            185,
+            textPrimary,
+            titleFont
+        );
+
+        drawText(
+            hdc,
+            "Firmware thermal zones and motherboard-level information exposed by Windows.",
+            37,
+            216,
+            textSecondary,
+            smallFont
+        );
+
+        auto drawBoardSummary =
+            [&](int left,
+                int right,
+                const std::string& label,
+                const std::string& value)
+        {
+            drawRoundedBox(
+                hdc,
+                left,
+                235,
+                right,
+                300,
+                tempCard
+            );
+
+            drawText(
+                hdc,
+                label,
+                left + 18,
+                247,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                shortText(value, 25),
+                left + 18,
+                270,
+                textPrimary,
+                labelFont
+            );
+        };
+
+        drawBoardSummary(
+            35,
+            240,
+            "Hottest board sensor",
+            formatTemperature(
+                temperatureStats.
+                    motherboardTemperatureC
+            )
+        );
+
+        drawBoardSummary(
+            250,
+            455,
+            "Detected sensors",
+            std::to_string(
+                temperatureStats.motherboardSensors.size() +
+                temperatureStats.sensors.size()
+            )
+        );
+
+        drawBoardSummary(
+            465,
+            670,
+            "Motherboard",
+            systemInfo.motherboardModel
+        );
+
+        drawBoardSummary(
+            680,
+            915,
+            "BIOS",
+            systemInfo.biosVersion
+        );
+
+        drawRoundedBox(
+            hdc,
+            35,
+            315,
+            650,
+            525,
+            tempCard
+        );
+
+        drawText(
+            hdc,
+            "System Thermal History",
+            55,
+            330,
+            textPrimary,
+            labelFont
+        );
+
+        drawDiskHistoryGraph(
+            hdc,
+            75,
+            365,
+            550,
+            125,
+            temperatureStats.
+                motherboardTemperatureHistory,
+            100.0,
+            boardOrange,
+            RGB(65, 45, 24)
+        );
+
+        drawText(
+            hdc,
+            "100 C",
+            575,
+            345,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "60 seconds ago",
+            75,
+            495,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Now",
+            600,
+            495,
+            textSecondary,
+            smallFont
+        );
+
+        if (
+            temperatureStats.motherboardSensors.empty() &&
+            !temperatureStats.acpiAvailable
+        )
+        {
+            drawText(
+                hdc,
+                "No motherboard or ACPI temperature sensors were exposed on this PC.",
+                135,
+                420,
+                textSecondary,
+                smallFont
+            );
+        }
+
+        drawRoundedBox(
+            hdc,
+            665,
+            315,
+            915,
+            525,
+            tempCard
+        );
+
+        drawText(
+            hdc,
+            "Board Sensors",
+            685,
+            330,
+            textPrimary,
+            labelFont
+        );
+
+        int drawnSensorCount = 0;
+
+        for (
+            size_t index = 0;
+            index < temperatureStats.motherboardSensors.size() &&
+            drawnSensorCount < 6;
+            index++
+        )
+        {
+            const ThermalSensorInfo& sensor =
+                temperatureStats.motherboardSensors[index];
+
+            int sensorY =
+                365 + drawnSensorCount * 25;
+
+            drawText(
+                hdc,
+                shortText(sensor.name, 18),
+                685,
+                sensorY,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                formatTemperature(sensor.temperatureC),
+                835,
+                sensorY,
+                boardOrange,
+                smallFont
+            );
+
+            drawnSensorCount++;
+        }
+
+        for (
+            size_t index = 0;
+            index < temperatureStats.sensors.size() &&
+            drawnSensorCount < 6;
+            index++
+        )
+        {
+            const ThermalSensorInfo& sensor =
+                temperatureStats.sensors[index];
+
+            int sensorY =
+                365 + drawnSensorCount * 25;
+
+            drawText(
+                hdc,
+                shortText(sensor.name, 18),
+                685,
+                sensorY,
+                textSecondary,
+                smallFont
+            );
+
+            drawText(
+                hdc,
+                formatTemperature(sensor.temperatureC),
+                835,
+                sensorY,
+                RGB(185, 150, 85),
+                smallFont
+            );
+
+            drawnSensorCount++;
+        }
+
+        if (drawnSensorCount == 0)
+        {
+            drawText(
+                hdc,
+                "No board temperature sensors",
+                685,
+                375,
+                textSecondary,
+                smallFont
+            );
+        }
+
+        drawRoundedBox(
+            hdc,
+            35,
+            540,
+            915,
+            680,
+            tempCard
+        );
+
+        drawText(
+            hdc,
+            "System / Motherboard Information",
+            55,
+            555,
+            textPrimary,
+            labelFont
+        );
+
+        drawText(
+            hdc,
+            "Manufacturer:",
+            55,
+            590,
+            textSecondary,
+            smallFont
+        );
+        drawText(
+            hdc,
+            shortText(
+                systemInfo.motherboardManufacturer,
+                28
+            ),
+            160,
+            590,
+            textPrimary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Model:",
+            55,
+            615,
+            textSecondary,
+            smallFont
+        );
+        drawText(
+            hdc,
+            shortText(
+                systemInfo.motherboardModel,
+                28
+            ),
+            160,
+            615,
+            textPrimary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "BIOS:",
+            55,
+            640,
+            textSecondary,
+            smallFont
+        );
+        drawText(
+            hdc,
+            shortText(
+                systemInfo.biosVendor +
+                    " " +
+                    systemInfo.biosVersion,
+                30
+            ),
+            160,
+            640,
+            textPrimary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Windows exposes firmware thermal zones, not every board sensor.",
+            480,
+            590,
+            textSecondary,
+            smallFont
+        );
+
+        drawText(
+            hdc,
+            "Unavailable sensors remain -- instead of using estimated values.",
+            480,
+            620,
+            textSecondary,
+            smallFont
+        );
+
+        if (temperatureStats.motherboardSensorGeneric)
+        {
+            drawText(
+                hdc,
+                "The displayed reading is a generic ACPI zone, not a named board sensor.",
+                480,
+                650,
+                textSecondary,
+                smallFont
+            );
+        }
+    }
+}
+
 
 else if (currentPage == AppPage::Performance)
 {
@@ -9163,7 +11120,8 @@ drawText(
 );
 
 double dashboardTemperature = -1.0;
-int temperatureGpuIndex = -1;
+std::string dashboardTemperatureSource =
+    "--";
 
 for (int i = 0;
      i < static_cast<int>(
@@ -9179,8 +11137,26 @@ for (int i = 0;
     {
         dashboardTemperature =
             gpuStats[i].temperatureC;
-        temperatureGpuIndex = i;
+        dashboardTemperatureSource =
+            "GPU " +
+            std::to_string(i) +
+            " - " +
+            gpuStats[i].name;
     }
+}
+
+if (
+    temperatureStats.systemTemperatureC >= 0.0 &&
+    temperatureStats.systemTemperatureC >
+        dashboardTemperature
+)
+{
+    dashboardTemperature =
+        temperatureStats.systemTemperatureC;
+    dashboardTemperatureSource =
+        temperatureStats.hardwareSensorAvailable
+        ? "CPU / motherboard sensor"
+        : "Windows ACPI thermal zone";
 }
 
 if (dashboardTemperature >= 0.0)
@@ -9201,13 +11177,19 @@ if (dashboardTemperature >= 0.0)
         bigFont
     );
 
+    if (dashboardTemperatureSource.size() > 30)
+    {
+        dashboardTemperatureSource =
+            dashboardTemperatureSource.substr(
+                0,
+                27
+            ) +
+            "...";
+    }
+
     drawText(
         hdc,
-        "GPU " +
-            std::to_string(
-                temperatureGpuIndex
-            ) +
-            " temperature",
+        dashboardTemperatureSource,
         660,
         425,
         textSecondary,

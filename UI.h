@@ -10,6 +10,7 @@ enum class AppPage
     Dashboard,
     Processes,
     Performance,
+    Temperatures,
     SystemInfo,
     Settings
 };
@@ -34,10 +35,19 @@ enum class PerformanceView
     Network
 };
 
+enum class TemperatureView
+{
+    CPU,
+    GPU,
+    Motherboard
+};
+
 extern PerformanceView performanceView;
 extern int selectedDiskIndex;
 extern int selectedGpuIndex;
 extern int selectedNetworkIndex;
+extern TemperatureView temperatureView;
+extern int selectedTemperatureGpuIndex;
 extern int systemInfoScrollOffset;
 extern int systemInfoMaxScrollOffset;
 extern std::string selectedConnectedDeviceKey;
