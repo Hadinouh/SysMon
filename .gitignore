@@ -1,8 +1,41 @@
+# Compiled application and native build output
 *.exe
 *.o
+*.obj
 *.res
-.vscode/
-SysMon.ini
+*.pdb
+*.ilk
 
+# Local settings / runtime data
+SysMon.ini
+*.sysmonlog
+SysMon-support.txt
+
+# .NET build output
 **/bin/
 **/obj/
+
+# Editor / IDE files
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Generated test output
+/tests/*.exe
+/tests/*-render.png
+/tests/*-light.png
+/tests/layout-*.png
+
+# Release packaging output
+/dist/
+
+# Accidental Windows-expanded path captured during development
+%SystemDrive%/
+
+# Local cleanup archive
+no need/
+
+# OS files
+Thumbs.db
+.DS_Store

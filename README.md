@@ -6,13 +6,11 @@ It provides real-time CPU, memory, disk, process, hardware, device, and system m
 
 ## Current Version
 
-### v0.8.0
+### v0.9.0
 
-SysMon v0.8 introduces the new System Info / About PC page.
+SysMon v0.9.0 is a major monitoring and usability update. It adds multi-GPU monitoring, live network monitoring, hardware temperature sensors, a redesigned Processes experience, a complete Settings page, Windows utility tools, alerts and logging, update checking, startup integration, themes, and responsive/maximized layouts.
 
-The page provides detailed Windows, CPU, memory, graphics, storage, network, motherboard, BIOS, and connected-device information using real Windows system data.
-
-Connected devices can also be selected to view detailed Plug and Play information including device class, manufacturer, connection type, hardware ID, instance ID, VID/PID information, location, and device status.
+The temperature engine uses the bundled `SysMonSensors` helper based on LibreHardwareMonitor. The Windows release package can publish this helper self-contained so end users do not need to install the .NET runtime separately.
 
 ## Features
 
@@ -143,7 +141,32 @@ The Performance page currently provides detailed monitoring for:
 - Page file detection
 - Storage type detection
 
-GPU and network performance monitoring are planned for a future version.
+### GPU
+
+- Multi-GPU detection and selection
+- Live GPU utilization history
+- Dedicated and shared GPU memory usage
+- GPU temperature and fan telemetry when supported
+- GPU clocks, power, encode/decode activity, driver and bus information
+- GPU-related process statistics
+
+### Network
+
+- Multiple network-adapter detection and selection
+- Live download and upload history
+- Current transfer rates and link speed
+- Total sent/received data and packet statistics
+- IPv4, IPv6, MAC, gateway, DNS, subnet, and connection information
+- Wi-Fi SSID, standard, and signal quality when available
+
+### Temperatures
+
+- CPU package/core temperatures when supported
+- GPU temperature monitoring
+- Motherboard/firmware sensor monitoring
+- Temperature history
+- CPU package power and clock telemetry when available
+- Hardware readings provided through the `SysMonSensors` helper
 
 ## Processes
 
@@ -276,7 +299,65 @@ The widget displays live CPU and RAM usage with progress bars.
 
 The widget can be dragged anywhere on the desktop. Its position and enabled state are stored in `SysMon.ini` and restored the next time SysMon starts.
 
+## Settings
+
+SysMon v0.9.0 adds a complete Settings page with startup behavior, tray behavior, update checks, monitoring intervals, temperature/network units, dark/light/Windows-following themes, accent colors, transparency, compact mode, quick tab previews, font sizing, alerts, logging, desktop notifications, the desktop overlay, settings backup/restore, and support tools.
+
+## Tools
+
+The Tools page provides shortcuts and actions for common Windows maintenance and diagnostic utilities, including Disk Cleanup, System File Checker, Startup Manager, Event Viewer, System Configuration, Services, elevated Command Prompt, drive optimization, Windows Update, Power Options, System Restore, network settings, temporary-file cleanup, DNS flushing, Recycle Bin cleanup, and system snapshots.
+
+## Building
+
+Requirements for the native application:
+
+- Windows
+- MSYS2 UCRT64 / MinGW-w64 `g++` and `windres`
+- C++17 support
+
+Build the application from PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build.ps1
+```
+
+To create a complete Windows x64 release ZIP, including a self-contained `SysMonSensors` helper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\package-release.ps1
+```
+
+The finished archive is written to `dist/`.
+
 ## Version History
+
+### v0.9.0
+
+- Added multi-GPU performance monitoring and GPU selection
+- Added live network performance monitoring and adapter selection
+- Added hardware temperature monitoring through SysMonSensors / LibreHardwareMonitor
+- Added and polished the dedicated Temperatures page
+- Expanded dashboard hardware statistics
+- Overhauled the Processes page with filtering, grouping, metadata, actions, and priority controls
+- Added background process sampling and process metadata caching
+- Added the complete Settings page
+- Added dark, light, and Follow Windows themes, accent colors, transparency, compact mode, quick tab previews, and font sizing
+- Added configurable monitoring interval, temperature units, and network units
+- Added CPU/GPU temperature, disk usage, and memory usage alerts
+- Added desktop notifications, alert sounds, alert logging, and monitoring-data logging
+- Added configurable log retention and the SysMon data folder
+- Added settings export, import, and reset controls
+- Added startup integration through Windows Task Scheduler
+- Added optional GitHub release update checking
+- Added desktop overlay settings and the Ctrl+Alt+O overlay hotkey
+- Added the Tools page with Windows maintenance and diagnostic shortcuts
+- Expanded System Info and connected-device details
+- Added responsive resizing and improved maximized/full-screen layouts
+- Added responsive hitboxes, scrolling, and quick navigation previews
+- Improved minimize-to-tray, restore, and tray-icon recovery behavior
+- Improved desktop widget behavior and persisted positioning
+- Added background-sampling and rendering-performance improvements
+- Added build automation, release packaging, application manifest, and Windows version metadata
 
 ### v0.8.0
 

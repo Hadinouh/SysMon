@@ -1,3 +1,4 @@
+#include "Theme.h"
 #include "Widget.h"
 #include "Stats.h"
 #include "Settings.h"
@@ -71,7 +72,7 @@ LRESULT CALLBACK WidgetProc(
 
         SetTextColor(
             hdc,
-            RGB(170, 180, 195)
+            uiColor(RGB(170, 180, 195))
         );
 
         TextOutA(
@@ -100,7 +101,7 @@ LRESULT CALLBACK WidgetProc(
 
         SetTextColor(
             hdc,
-            RGB(245, 245, 245)
+            uiColor(RGB(245, 245, 245))
         );
 
         TextOutA(
@@ -116,7 +117,7 @@ LRESULT CALLBACK WidgetProc(
 
         HBRUSH blueBrush =
             CreateSolidBrush(
-                RGB(66, 135, 245)
+                uiColor(RGB(66, 135, 245))
             );
 
         int cpuWidth =
@@ -148,7 +149,7 @@ LRESULT CALLBACK WidgetProc(
 
         SetTextColor(
             hdc,
-            RGB(170, 180, 195)
+            uiColor(RGB(170, 180, 195))
         );
 
         TextOutA(
@@ -175,7 +176,7 @@ LRESULT CALLBACK WidgetProc(
 
         SetTextColor(
             hdc,
-            RGB(245, 245, 245)
+            uiColor(RGB(245, 245, 245))
         );
 
         TextOutA(

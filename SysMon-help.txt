@@ -1,0 +1,37 @@
+SysMon settings guide
+
+General
+Start with Windows registers a per-user logon task for the elevated app.
+Minimize to System Tray keeps monitoring running after closing the window.
+Check for Updates checks the configured GitHub release endpoint; it does not install software.
+Theme supports Dark, Light, and Follow Windows. English is currently the only language.
+
+Monitoring and appearance
+Update Interval controls sampling requests and widget refresh.
+Temperature Unit affects displayed temperatures and axis labels; internal samples remain Celsius.
+Network Unit affects displayed rates; data totals remain bytes.
+Accent Color changes interface cyan accents while preserving other metric colors.
+Transparency supports 55-100%; click or drag the entire slider track.
+Compact Mode tightens Settings rows and slightly reduces application text.
+Font Size applies to application text. Quick Tab Previews controls navigation previews.
+
+Alerts and local data
+Temperature limits are stored in Celsius. The menu and displayed limits follow your chosen unit.
+Disk Usage Alert monitors used space on the system disk, not disk activity.
+Alerts fire when a reading crosses its threshold. A reading must fall at least two units below
+the limit before another alert can fire. Unsupported sensor values do not trigger alerts.
+Desktop Notifications uses Windows notification-area balloons; Windows may suppress notifications.
+Play Alerts controls the warning sound separately from desktop notifications.
+Log Alerts to File writes alerts-YYYY-MM-DD.sysmonlog files in the data folder.
+Enable Data Logging writes monitor-YYYY-MM-DD.sysmonlog samples once per second.
+Retention deletes only old SysMon monitor/alert logs in that folder, when a log is next written.
+No anonymous usage data is collected or sent by this version.
+
+Integration and support
+Show Overlay Widget toggles the desktop overlay. Ctrl+Alt+O is the fixed shortcut.
+If Windows reports that the shortcut is unavailable, the Settings button still toggles the overlay.
+Run as Administrator reports the current elevated state; this build already requires elevation.
+Associate makes .sysmonlog files open in Windows Notepad.
+Export saves SysMon-settings-backup.ini in the data folder. Import restores that backup.
+Data Folder opens logs and backups. Create Report writes a local template you can fill in and share.
+No report is sent automatically.

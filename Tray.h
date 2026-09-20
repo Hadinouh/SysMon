@@ -7,6 +7,6 @@
 #define ID_TRAY_OPEN 1001
 #define ID_TRAY_EXIT 1002
 
-void addTrayIcon(HWND hwnd);
+bool addTrayIcon(HWND hwnd);
 void removeTrayIcon();
 void restoreSysMon(HWND hwnd);

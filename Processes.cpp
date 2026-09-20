@@ -1,4 +1,5 @@
 #include "Processes.h"
+#include "BackgroundSampler.h"
 
 #include <windows.h>
 #include <vector>
@@ -154,7 +155,11 @@ std::string wideToString(
 
 std::vector<ProcessInfo> getRunningProcesses()
 {
+    // Termination can request a fresh list while the sampler is collecting.
+    static std::mutex collectionMutex;
+    std::lock_guard<std::mutex> collectionLock(collectionMutex);
     std::vector<ProcessInfo> processes;
+    processes.reserve(256);
 
 
     // ----------------------------------------------------
@@ -193,26 +198,23 @@ std::vector<ProcessInfo> getRunningProcesses()
     // Load NtQuerySystemInformation
     // ----------------------------------------------------
 
-    HMODULE ntdll =
+    static HMODULE ntdll =
         GetModuleHandleW(
             L"ntdll.dll"
         );
 
-    if (!ntdll)
-    {
-        return processes;
-    }
-
-
-    auto NtQuerySystemInformation =
-        reinterpret_cast<
-            NtQuerySystemInformationFn
-        >(
-            GetProcAddress(
-                ntdll,
-                "NtQuerySystemInformation"
-            )
-        );
+    static NtQuerySystemInformationFn
+        NtQuerySystemInformation =
+            ntdll != nullptr
+            ? reinterpret_cast<
+                NtQuerySystemInformationFn
+              >(
+                GetProcAddress(
+                    ntdll,
+                    "NtQuerySystemInformation"
+                )
+              )
+            : nullptr;
 
     if (!NtQuerySystemInformation)
     {
@@ -230,12 +232,14 @@ std::vector<ProcessInfo> getRunningProcesses()
             );
 
 
-    ULONG bufferSize =
-        1024 * 1024;
-
-    std::vector<unsigned char> buffer(
-        bufferSize
+    // Reuse the native query buffer instead of allocating ~1 MB every
+    // refresh. It only grows if Windows reports that more space is needed.
+    static std::vector<unsigned char> buffer(
+        1024 * 1024
     );
+
+    ULONG bufferSize =
+        static_cast<ULONG>(buffer.size());
 
 
     NTSTATUS status;
@@ -298,6 +302,13 @@ std::vector<ProcessInfo> getRunningProcesses()
         DWORD,
         ULONGLONG
     > currentProcessTimes;
+
+    currentProcessTimes.reserve(
+        (std::max)(
+            static_cast<size_t>(256),
+            previousProcessTimes.size() + 32
+        )
+    );
 
 
     ULONGLONG systemDelta = 0;
@@ -515,6 +526,48 @@ process.threadCount =
 
     return processes;
 }
+
+
+// --------------------------------------------------------
+// Shared lightweight process snapshot
+// --------------------------------------------------------
+
+namespace
+{
+    BackgroundSampler<std::vector<ProcessInfo>>& processSampler()
+    {
+        static BackgroundSampler<std::vector<ProcessInfo>> sampler(
+            [](unsigned) { return getRunningProcesses(); });
+        return sampler;
+    }
+}
+
+const std::vector<ProcessInfo>& getCachedRunningProcesses(bool forceRefresh)
+{
+    static std::vector<ProcessInfo> cachedProcesses;
+    static std::shared_ptr<const std::vector<ProcessInfo>> displayed;
+    static ULONGLONG lastRequestTick = 0;
+    auto snapshot = processSampler().latest();
+    if (snapshot && snapshot != displayed)
+    {
+        cachedProcesses = *snapshot;
+        displayed = std::move(snapshot);
+    }
+    const ULONGLONG now = GetTickCount64();
+    if (forceRefresh || lastRequestTick == 0 || now - lastRequestTick >= 1000)
+    {
+        processSampler().request();
+        lastRequestTick = now;
+    }
+    return cachedProcesses;
+}
+
+void stopProcessSampler()
+{
+    processSampler().stop();
+}
+
+
 bool terminateTaskByPid(
     DWORD pid)
 {

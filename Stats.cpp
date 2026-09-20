@@ -10,6 +10,7 @@
 #include "Stats.h"
 
 #include <ws2tcpip.h>
+#include <wlanapi.h>
 #include <pdh.h>
 #include <pdhmsg.h>
 #include <algorithm>
@@ -25,6 +26,22 @@
 #include <cstdlib>
 #include <winioctl.h>
 
+
+#include "BackgroundSampler.h"
+
+// All collector state below belongs exclusively to the sampling worker.
+namespace StatsCollector
+{
+double getCpuUsage();
+void updateStats(bool allowHeavy);
+void addCpuHistorySample();
+void addRamHistorySample();
+void refreshSystemInfo(bool force);
+void refreshGpuStats(bool force);
+void refreshNetworkStats(bool force);
+void refreshTemperatureStats(bool force);
+bool startHardwareSensorBridge();
+void stopHardwareSensorBridge();
 
 double cpuUsage = 0.0;
 std::vector<double> cpuHistory;
@@ -69,6 +86,7 @@ namespace
     };
 
     std::map<int, DiskCounterState> diskCounterStates;
+    std::map<int, HANDLE> diskPerformanceHandles;
     ULONGLONG lastDiskEnumerationTick = 0;
 
     constexpr double bytesPerGB =
@@ -760,11 +778,29 @@ namespace
         newDisk.averageResponseMs =
             oldDisk.averageResponseMs;
 
+        newDisk.readOperationsPerSecond =
+            oldDisk.readOperationsPerSecond;
+
+        newDisk.writeOperationsPerSecond =
+            oldDisk.writeOperationsPerSecond;
+
+        newDisk.totalBytesRead =
+            oldDisk.totalBytesRead;
+
+        newDisk.totalBytesWritten =
+            oldDisk.totalBytesWritten;
+
         newDisk.activeHistory =
             oldDisk.activeHistory;
 
         newDisk.transferHistory =
             oldDisk.transferHistory;
+
+        newDisk.readHistory =
+            oldDisk.readHistory;
+
+        newDisk.writeHistory =
+            oldDisk.writeHistory;
     }
 
 
@@ -972,48 +1008,37 @@ namespace
     {
         DWORD bytesReturned = 0;
 
-        HANDLE handle =
-            openPhysicalDrive(
-                diskNumber,
-                0
-            );
+        HANDLE& cachedHandle =
+            diskPerformanceHandles[diskNumber];
 
-        if (handle != INVALID_HANDLE_VALUE)
+        if (cachedHandle == nullptr ||
+            cachedHandle == INVALID_HANDLE_VALUE)
         {
-            BOOL ok =
-                DeviceIoControl(
-                    handle,
-                    IOCTL_DISK_PERFORMANCE,
-                    nullptr,
-                    0,
-                    &performance,
-                    sizeof(performance),
-                    &bytesReturned,
-                    nullptr
+            cachedHandle =
+                openPhysicalDrive(
+                    diskNumber,
+                    0
                 );
 
-            CloseHandle(handle);
-
-            if (ok)
+            if (cachedHandle == INVALID_HANDLE_VALUE)
             {
-                return true;
+                cachedHandle =
+                    openPhysicalDrive(
+                        diskNumber,
+                        GENERIC_READ
+                    );
             }
         }
 
-        handle =
-            openPhysicalDrive(
-                diskNumber,
-                GENERIC_READ
-            );
-
-        if (handle == INVALID_HANDLE_VALUE)
+        if (cachedHandle == INVALID_HANDLE_VALUE ||
+            cachedHandle == nullptr)
         {
             return false;
         }
 
         BOOL ok =
             DeviceIoControl(
-                handle,
+                cachedHandle,
                 IOCTL_DISK_PERFORMANCE,
                 nullptr,
                 0,
@@ -1023,11 +1048,17 @@ namespace
                 nullptr
             );
 
-        CloseHandle(handle);
+        if (!ok)
+        {
+            // A hot-plug/removal can invalidate a cached handle. Close it so
+            // the next sample can reopen the current physical drive cleanly.
+            CloseHandle(cachedHandle);
+            cachedHandle = INVALID_HANDLE_VALUE;
+            return false;
+        }
 
-        return ok != FALSE;
+        return true;
     }
-
 
     void updateDiskPerformance()
     {
@@ -1097,6 +1128,29 @@ namespace
                     0.0
                 );
 
+                pushDiskHistory(
+                    disk.readHistory,
+                    0.0
+                );
+
+                pushDiskHistory(
+                    disk.writeHistory,
+                    0.0
+                );
+
+                disk.totalBytesRead =
+                    static_cast<unsigned long long>(
+                        performance.BytesRead.QuadPart
+                    );
+
+                disk.totalBytesWritten =
+                    static_cast<unsigned long long>(
+                        performance.BytesWritten.QuadPart
+                    );
+
+                disk.readOperationsPerSecond = 0.0;
+                disk.writeOperationsPerSecond = 0.0;
+
                 continue;
             }
 
@@ -1163,6 +1217,26 @@ namespace
 
             double elapsedSeconds =
                 elapsedMs / 1000.0;
+
+            disk.readOperationsPerSecond =
+                static_cast<double>(
+                    readCountDiff
+                ) / elapsedSeconds;
+
+            disk.writeOperationsPerSecond =
+                static_cast<double>(
+                    writeCountDiff
+                ) / elapsedSeconds;
+
+            disk.totalBytesRead =
+                static_cast<unsigned long long>(
+                    performance.BytesRead.QuadPart
+                );
+
+            disk.totalBytesWritten =
+                static_cast<unsigned long long>(
+                    performance.BytesWritten.QuadPart
+                );
 
             disk.readMBps =
                 static_cast<double>(
@@ -1281,10 +1355,21 @@ namespace
                 disk.readMBps +
                 disk.writeMBps
             );
+
+            pushDiskHistory(
+                disk.readHistory,
+                disk.readMBps
+            );
+
+            pushDiskHistory(
+                disk.writeHistory,
+                disk.writeMBps
+            );
         }
     }
 
     ULONGLONG lastSystemInfoDynamicTick = 0;
+    ULONGLONG lastConnectedDeviceTick = 0;
 
 
     std::string readRegistryString(
@@ -3136,6 +3221,41 @@ namespace
     }
 
 
+    DWORD parseGpuProcessId(
+        const std::wstring& instance)
+    {
+        size_t position =
+            instance.find(L"pid_");
+
+        if (position == std::wstring::npos)
+        {
+            return 0;
+        }
+
+        position += 4;
+
+        DWORD value = 0;
+        bool found = false;
+
+        while (
+            position < instance.size() &&
+            instance[position] >= L'0' &&
+            instance[position] <= L'9'
+        )
+        {
+            found = true;
+            value =
+                value * 10 +
+                static_cast<DWORD>(
+                    instance[position] - L'0'
+                );
+            position++;
+        }
+
+        return found ? value : 0;
+    }
+
+
     struct PdhFunctions
     {
         using OpenQueryFn =
@@ -3268,6 +3388,7 @@ namespace
         PDH_HCOUNTER engine = nullptr;
         PDH_HCOUNTER dedicated = nullptr;
         PDH_HCOUNTER shared = nullptr;
+        PDH_HCOUNTER processDedicated = nullptr;
     };
 
 
@@ -3328,6 +3449,16 @@ namespace
             ) != ERROR_SUCCESS)
         {
             state.shared = nullptr;
+        }
+
+        if (pdh.addEnglishCounter(
+                state.query,
+                L"\\GPU Process Memory(*)\\Dedicated Usage",
+                0,
+                &state.processDedicated
+            ) != ERROR_SUCCESS)
+        {
+            state.processDedicated = nullptr;
         }
 
         return state;
@@ -3522,6 +3653,9 @@ namespace
         std::map<int, double> allEngines;
         std::map<int, double> dedicated;
         std::map<int, double> shared;
+        std::map<std::pair<int, DWORD>, double> processThreeD;
+        std::map<std::pair<int, DWORD>, double> processAllEngines;
+        std::map<std::pair<int, DWORD>, double> processDedicated;
 
         for (const auto& item :
              readPdhCounterArray(
@@ -3544,12 +3678,29 @@ namespace
             allEngines[physicalIndex] +=
                 item.second;
 
+            const DWORD processId =
+                parseGpuProcessId(name);
+
+            if (processId != 0)
+            {
+                processAllEngines[
+                    { physicalIndex, processId }
+                ] += item.second;
+            }
+
             if (name.find(
                     L"engtype_3D"
                 ) != std::wstring::npos)
             {
                 threeD[physicalIndex] +=
                     item.second;
+
+                if (processId != 0)
+                {
+                    processThreeD[
+                        { physicalIndex, processId }
+                    ] += item.second;
+                }
             }
             else if (
                 name.find(
@@ -3602,6 +3753,32 @@ namespace
             {
                 shared[physicalIndex] +=
                     item.second;
+            }
+        }
+
+        for (const auto& item :
+             readPdhCounterArray(
+                 state.processDedicated
+             ))
+        {
+            const int physicalIndex =
+                parseGpuPhysicalIndex(
+                    item.first
+                );
+
+            const DWORD processId =
+                parseGpuProcessId(
+                    item.first
+                );
+
+            if (
+                physicalIndex >= 0 &&
+                processId != 0
+            )
+            {
+                processDedicated[
+                    { physicalIndex, processId }
+                ] += item.second;
             }
         }
 
@@ -3706,6 +3883,89 @@ namespace
 
             gpu.performanceValid =
                 hasPerformanceData;
+
+            gpu.processes.clear();
+
+            std::set<DWORD> processIds;
+
+            for (const auto& entry : processAllEngines)
+            {
+                if (entry.first.first == physicalIndex)
+                {
+                    processIds.insert(
+                        entry.first.second
+                    );
+                }
+            }
+
+            for (const auto& entry : processDedicated)
+            {
+                if (entry.first.first == physicalIndex)
+                {
+                    processIds.insert(
+                        entry.first.second
+                    );
+                }
+            }
+
+            for (DWORD processId : processIds)
+            {
+                const auto key =
+                    std::make_pair(
+                        physicalIndex,
+                        processId
+                    );
+
+                GpuProcessStats process;
+                process.pid = processId;
+
+                auto threeDProcessIt =
+                    processThreeD.find(key);
+
+                if (threeDProcessIt != processThreeD.end())
+                {
+                    process.utilizationPercent =
+                        std::clamp(
+                            threeDProcessIt->second,
+                            0.0,
+                            100.0
+                        );
+                }
+                else
+                {
+                    auto allProcessIt =
+                        processAllEngines.find(key);
+
+                    if (allProcessIt != processAllEngines.end())
+                    {
+                        process.utilizationPercent =
+                            std::clamp(
+                                allProcessIt->second,
+                                0.0,
+                                100.0
+                            );
+                    }
+                }
+
+                auto processMemoryIt =
+                    processDedicated.find(key);
+
+                if (processMemoryIt != processDedicated.end())
+                {
+                    process.dedicatedMemoryBytes =
+                        static_cast<unsigned long long>(
+                            processMemoryIt->second
+                        );
+                }
+
+                if (
+                    process.utilizationPercent > 0.0 ||
+                    process.dedicatedMemoryBytes > 0
+                )
+                {
+                    gpu.processes.push_back(process);
+                }
+            }
         }
     }
 
@@ -3772,6 +4032,12 @@ namespace
                 nvmlDevice_t,
                 unsigned int*
             );
+        using GetClockInfoFn =
+            nvmlReturn_t (*)(
+                nvmlDevice_t,
+                int,
+                unsigned int*
+            );
         using GetUtilizationFn =
             nvmlReturn_t (*)(
                 nvmlDevice_t,
@@ -3815,6 +4081,7 @@ namespace
         GetFanSpeedFn getFanSpeed = nullptr;
         GetPowerUsageFn getPowerUsage = nullptr;
         GetPowerLimitFn getPowerLimit = nullptr;
+        GetClockInfoFn getClockInfo = nullptr;
         GetUtilizationFn getUtilization = nullptr;
         GetMemoryFn getMemory = nullptr;
         GetCodecUtilizationFn getEncoderUtilization = nullptr;
@@ -3940,6 +4207,13 @@ namespace
                 nvmlProc(
                     nvml.module,
                     "nvmlDeviceGetPowerManagementLimit"
+                )
+            );
+        nvml.getClockInfo =
+            reinterpret_cast<NvmlFunctions::GetClockInfoFn>(
+                nvmlProc(
+                    nvml.module,
+                    "nvmlDeviceGetClockInfo"
                 )
             );
         nvml.getUtilization =
@@ -4200,6 +4474,38 @@ namespace
                     value / 1000.0;
             }
 
+            // NVML clock type 0 = graphics clock and 2 = memory clock.
+            // These are current hardware-reported clocks, not estimates.
+            value = 0;
+            if (
+                nvml.getClockInfo != nullptr &&
+                nvml.getClockInfo(
+                    device,
+                    0,
+                    &value
+                ) == 0 &&
+                value > 0
+            )
+            {
+                gpu.coreClockMHz =
+                    static_cast<double>(value);
+            }
+
+            value = 0;
+            if (
+                nvml.getClockInfo != nullptr &&
+                nvml.getClockInfo(
+                    device,
+                    2,
+                    &value
+                ) == 0 &&
+                value > 0
+            )
+            {
+                gpu.memoryClockMHz =
+                    static_cast<double>(value);
+            }
+
             NvmlUtilization utilization = {};
             if (
                 nvml.getUtilization != nullptr &&
@@ -4419,6 +4725,364 @@ namespace
         );
 
         return buffer.data();
+    }
+
+
+    std::string toLowerText(
+        std::string value)
+    {
+        std::transform(
+            value.begin(),
+            value.end(),
+            value.begin(),
+            [](unsigned char character)
+            {
+                return static_cast<char>(
+                    std::tolower(character)
+                );
+            }
+        );
+
+        return value;
+    }
+
+
+    std::string ipv4PrefixToMask(
+        ULONG prefixLength)
+    {
+        if (prefixLength > 32)
+        {
+            return "--";
+        }
+
+        unsigned long mask =
+            prefixLength == 0
+            ? 0UL
+            : 0xFFFFFFFFUL <<
+                (32 - prefixLength);
+
+        std::ostringstream stream;
+        stream
+            << ((mask >> 24) & 0xFF)
+            << "."
+            << ((mask >> 16) & 0xFF)
+            << "."
+            << ((mask >> 8) & 0xFF)
+            << "."
+            << (mask & 0xFF);
+
+        return stream.str();
+    }
+
+
+    std::string wifiPhyText(
+        DOT11_PHY_TYPE phyType)
+    {
+        switch (phyType)
+        {
+        case dot11_phy_type_hrdsss:
+            return "802.11b";
+        case dot11_phy_type_erp:
+            return "802.11g";
+        case dot11_phy_type_ofdm:
+            return "802.11a";
+        case dot11_phy_type_ht:
+            return "802.11n";
+        case static_cast<DOT11_PHY_TYPE>(8):
+            return "802.11ac";
+        case static_cast<DOT11_PHY_TYPE>(10):
+            return "802.11ax";
+        default:
+            return "Wi-Fi";
+        }
+    }
+
+
+    struct WlanApiFunctions
+    {
+        using WlanOpenHandleFn =
+            DWORD (WINAPI *)(
+                DWORD,
+                PVOID,
+                PDWORD,
+                PHANDLE
+            );
+
+        using WlanEnumInterfacesFn =
+            DWORD (WINAPI *)(
+                HANDLE,
+                PVOID,
+                PWLAN_INTERFACE_INFO_LIST*
+            );
+
+        using WlanQueryInterfaceFn =
+            DWORD (WINAPI *)(
+                HANDLE,
+                const GUID*,
+                WLAN_INTF_OPCODE,
+                PVOID,
+                PDWORD,
+                PVOID*,
+                WLAN_OPCODE_VALUE_TYPE*
+            );
+
+        using WlanFreeMemoryFn =
+            VOID (WINAPI *)(PVOID);
+
+        using WlanCloseHandleFn =
+            DWORD (WINAPI *)(HANDLE, PVOID);
+
+        HMODULE module = nullptr;
+        WlanOpenHandleFn openHandle = nullptr;
+        WlanEnumInterfacesFn enumInterfaces = nullptr;
+        WlanQueryInterfaceFn queryInterface = nullptr;
+        WlanFreeMemoryFn freeMemory = nullptr;
+        WlanCloseHandleFn closeHandle = nullptr;
+    };
+
+
+    WlanApiFunctions& getWlanApi()
+    {
+        static WlanApiFunctions api;
+        static bool initialized = false;
+
+        if (!initialized)
+        {
+            initialized = true;
+            api.module =
+                LoadLibraryA("wlanapi.dll");
+
+            if (api.module != nullptr)
+            {
+                api.openHandle =
+                    reinterpret_cast<
+                        WlanApiFunctions::WlanOpenHandleFn
+                    >(
+                        GetProcAddress(
+                            api.module,
+                            "WlanOpenHandle"
+                        )
+                    );
+
+                api.enumInterfaces =
+                    reinterpret_cast<
+                        WlanApiFunctions::WlanEnumInterfacesFn
+                    >(
+                        GetProcAddress(
+                            api.module,
+                            "WlanEnumInterfaces"
+                        )
+                    );
+
+                api.queryInterface =
+                    reinterpret_cast<
+                        WlanApiFunctions::WlanQueryInterfaceFn
+                    >(
+                        GetProcAddress(
+                            api.module,
+                            "WlanQueryInterface"
+                        )
+                    );
+
+                api.freeMemory =
+                    reinterpret_cast<
+                        WlanApiFunctions::WlanFreeMemoryFn
+                    >(
+                        GetProcAddress(
+                            api.module,
+                            "WlanFreeMemory"
+                        )
+                    );
+
+                api.closeHandle =
+                    reinterpret_cast<
+                        WlanApiFunctions::WlanCloseHandleFn
+                    >(
+                        GetProcAddress(
+                            api.module,
+                            "WlanCloseHandle"
+                        )
+                    );
+            }
+        }
+
+        return api;
+    }
+
+
+    void queryWifiDetails(
+        NetworkStats& adapter)
+    {
+        if (adapter.type != "Wi-Fi")
+        {
+            return;
+        }
+
+        WlanApiFunctions& api =
+            getWlanApi();
+
+        if (
+            api.openHandle == nullptr ||
+            api.enumInterfaces == nullptr ||
+            api.queryInterface == nullptr ||
+            api.freeMemory == nullptr ||
+            api.closeHandle == nullptr
+        )
+        {
+            return;
+        }
+
+        DWORD negotiatedVersion = 0;
+        HANDLE clientHandle = nullptr;
+
+        if (
+            api.openHandle(
+                2,
+                nullptr,
+                &negotiatedVersion,
+                &clientHandle
+            ) != ERROR_SUCCESS ||
+            clientHandle == nullptr
+        )
+        {
+            return;
+        }
+
+        PWLAN_INTERFACE_INFO_LIST interfaces =
+            nullptr;
+
+        if (
+            api.enumInterfaces(
+                clientHandle,
+                nullptr,
+                &interfaces
+            ) != ERROR_SUCCESS ||
+            interfaces == nullptr
+        )
+        {
+            api.closeHandle(
+                clientHandle,
+                nullptr
+            );
+            return;
+        }
+
+        const std::string targetDescription =
+            toLowerText(adapter.description);
+
+        for (DWORD index = 0;
+             index < interfaces->dwNumberOfItems;
+             index++)
+        {
+            const WLAN_INTERFACE_INFO& info =
+                interfaces->InterfaceInfo[index];
+
+            std::string interfaceDescription =
+                wideToAnsi(
+                    info.strInterfaceDescription
+                );
+
+            std::string lowerDescription =
+                toLowerText(interfaceDescription);
+
+            bool descriptionMatches =
+                targetDescription.empty() ||
+                targetDescription == "--" ||
+                lowerDescription == targetDescription ||
+                lowerDescription.find(
+                    targetDescription
+                ) != std::string::npos ||
+                targetDescription.find(
+                    lowerDescription
+                ) != std::string::npos;
+
+            if (!descriptionMatches)
+            {
+                continue;
+            }
+
+            DWORD dataSize = 0;
+            PVOID data = nullptr;
+            WLAN_OPCODE_VALUE_TYPE opcodeType =
+                wlan_opcode_value_type_invalid;
+
+            DWORD result =
+                api.queryInterface(
+                    clientHandle,
+                    &info.InterfaceGuid,
+                    wlan_intf_opcode_current_connection,
+                    nullptr,
+                    &dataSize,
+                    &data,
+                    &opcodeType
+                );
+
+            if (
+                result == ERROR_SUCCESS &&
+                data != nullptr &&
+                dataSize >=
+                    sizeof(WLAN_CONNECTION_ATTRIBUTES)
+            )
+            {
+                const WLAN_CONNECTION_ATTRIBUTES* attributes =
+                    reinterpret_cast<
+                        const WLAN_CONNECTION_ATTRIBUTES*
+                    >(data);
+
+                if (
+                    attributes->isState ==
+                    wlan_interface_state_connected
+                )
+                {
+                    const DOT11_SSID& ssid =
+                        attributes->
+                            wlanAssociationAttributes.
+                            dot11Ssid;
+
+                    if (
+                        ssid.uSSIDLength > 0 &&
+                        ssid.uSSIDLength <=
+                            DOT11_SSID_MAX_LENGTH
+                    )
+                    {
+                        adapter.ssid.assign(
+                            reinterpret_cast<
+                                const char*
+                            >(ssid.ucSSID),
+                            ssid.uSSIDLength
+                        );
+                    }
+
+                    adapter.signalQuality =
+                        static_cast<int>(
+                            attributes->
+                                wlanAssociationAttributes.
+                                wlanSignalQuality
+                        );
+
+                    adapter.wifiStandard =
+                        wifiPhyText(
+                            attributes->
+                                wlanAssociationAttributes.
+                                dot11PhyType
+                        );
+                }
+
+                api.freeMemory(data);
+                break;
+            }
+
+            if (data != nullptr)
+            {
+                api.freeMemory(data);
+            }
+        }
+
+        api.freeMemory(interfaces);
+        api.closeHandle(
+            clientHandle,
+            nullptr
+        );
     }
 
 
@@ -4802,8 +5466,6 @@ namespace
         )
         {
             if (
-                adapter->OperStatus !=
-                    IfOperStatusUp ||
                 adapter->IfType ==
                     IF_TYPE_SOFTWARE_LOOPBACK
             )
@@ -4815,17 +5477,24 @@ namespace
                 adapter->FirstUnicastAddress !=
                 nullptr;
 
-            bool usefulType =
+            bool physicalType =
                 adapter->IfType ==
                     IF_TYPE_ETHERNET_CSMACD ||
                 adapter->IfType ==
-                    IF_TYPE_IEEE80211 ||
-                adapter->IfType ==
-                    IF_TYPE_PPP ||
-                adapter->IfType ==
-                    IF_TYPE_TUNNEL;
+                    IF_TYPE_IEEE80211;
 
-            if (!hasAddress || !usefulType)
+            bool activeVirtualType =
+                (
+                    adapter->IfType ==
+                        IF_TYPE_PPP ||
+                    adapter->IfType ==
+                        IF_TYPE_TUNNEL
+                ) &&
+                adapter->OperStatus ==
+                    IfOperStatusUp &&
+                hasAddress;
+
+            if (!physicalType && !activeVirtualType)
             {
                 continue;
             }
@@ -4872,7 +5541,11 @@ namespace
                 networkTypeText(
                     adapter->IfType
                 );
-            item.status = "Connected";
+            item.status =
+                adapter->OperStatus ==
+                    IfOperStatusUp
+                ? "Connected"
+                : "Not Connected";
 
             item.macAddress =
                 formatMacAddress(
@@ -4924,6 +5597,11 @@ namespace
                     item.ipv4Address =
                         socketAddressToText(
                             address->Address
+                        );
+
+                    item.subnetMask =
+                        ipv4PrefixToMask(
+                            address->OnLinkPrefixLength
                         );
                 }
                 else if (
@@ -4983,6 +5661,8 @@ namespace
                 item.dnsServers = dns.str();
             }
 
+            queryWifiDetails(item);
+
             for (const NetworkStats& oldItem :
                  oldStats)
             {
@@ -5016,6 +5696,11 @@ namespace
                     -> int
                 {
                     int value = 0;
+
+                    if (item.status == "Connected")
+                    {
+                        value += 100;
+                    }
 
                     if (item.type == "Ethernet")
                     {
@@ -5071,7 +5756,41 @@ namespace
             adapter.downloadMbps = 0.0;
             adapter.uploadMbps = 0.0;
 
-            if (api.getIfEntry == nullptr)
+            bool counterAvailable = false;
+
+            if (api.getIfEntry != nullptr)
+            {
+                MIB_IFROW row = {};
+                row.dwIndex =
+                    adapter.interfaceIndex;
+
+                if (api.getIfEntry(&row) ==
+                    NO_ERROR)
+                {
+                    adapter.totalDownloadedBytes =
+                        static_cast<unsigned long long>(
+                            row.dwInOctets
+                        );
+                    adapter.totalUploadedBytes =
+                        static_cast<unsigned long long>(
+                            row.dwOutOctets
+                        );
+                    adapter.packetsReceived =
+                        static_cast<unsigned long long>(
+                            row.dwInUcastPkts +
+                            row.dwInNUcastPkts
+                        );
+                    adapter.packetsSent =
+                        static_cast<unsigned long long>(
+                            row.dwOutUcastPkts +
+                            row.dwOutNUcastPkts
+                        );
+
+                    counterAvailable = true;
+                }
+            }
+
+            if (!counterAvailable)
             {
                 pushNetworkHistory(
                     adapter.downloadHistory,
@@ -5083,44 +5802,6 @@ namespace
                 );
                 continue;
             }
-
-            MIB_IFROW row = {};
-            row.dwIndex =
-                adapter.interfaceIndex;
-
-            if (api.getIfEntry(&row) !=
-                NO_ERROR)
-            {
-                pushNetworkHistory(
-                    adapter.downloadHistory,
-                    0.0
-                );
-                pushNetworkHistory(
-                    adapter.uploadHistory,
-                    0.0
-                );
-                continue;
-            }
-
-            adapter.totalDownloadedBytes =
-                static_cast<unsigned long long>(
-                    row.dwInOctets
-                );
-            adapter.totalUploadedBytes =
-                static_cast<unsigned long long>(
-                    row.dwOutOctets
-                );
-
-            adapter.packetsReceived =
-                static_cast<unsigned long long>(
-                    row.dwInUcastPkts +
-                    row.dwInNUcastPkts
-                );
-            adapter.packetsSent =
-                static_cast<unsigned long long>(
-                    row.dwOutUcastPkts +
-                    row.dwOutNUcastPkts
-                );
 
             NetworkCounterState& state =
                 networkCounterStates[
@@ -5153,23 +5834,42 @@ namespace
             const unsigned long long counterWrap =
                 0x100000000ULL;
 
-            unsigned long long inDelta =
+            unsigned long long inDelta = 0;
+            unsigned long long outDelta = 0;
+
+            if (
                 adapter.totalDownloadedBytes >=
-                    state.inOctets
-                ? adapter.totalDownloadedBytes -
-                    state.inOctets
-                : counterWrap -
+                state.inOctets
+            )
+            {
+                inDelta =
+                    adapter.totalDownloadedBytes -
+                    state.inOctets;
+            }
+            else
+            {
+                inDelta =
+                    counterWrap -
                     state.inOctets +
                     adapter.totalDownloadedBytes;
+            }
 
-            unsigned long long outDelta =
+            if (
                 adapter.totalUploadedBytes >=
-                    state.outOctets
-                ? adapter.totalUploadedBytes -
-                    state.outOctets
-                : counterWrap -
+                state.outOctets
+            )
+            {
+                outDelta =
+                    adapter.totalUploadedBytes -
+                    state.outOctets;
+            }
+            else
+            {
+                outDelta =
+                    counterWrap -
                     state.outOctets +
                     adapter.totalUploadedBytes;
+            }
 
             state.tickMs = now;
             state.inOctets =
@@ -5460,10 +6160,12 @@ namespace
             }
         );
 
+        // Keep enough live TCP rows for the Network page to build a
+        // meaningful real per-process connection summary.
         if (activeNetworkConnections.size() >
-            12)
+            256)
         {
-            activeNetworkConnections.resize(12);
+            activeNetworkConnections.resize(256);
         }
     }
 
@@ -5924,6 +6626,60 @@ namespace
                     );
             }
 
+            // SPDRP_DRIVER points at the device's class-registry entry,
+            // for example {ClassGuid}\0001. Read the real driver metadata
+            // from that key without linking directly against SetupAPI.
+            std::string driverKey =
+                getSetupDeviceProperty(
+                    setup,
+                    set,
+                    info,
+                    SPDRP_DRIVER
+                );
+
+            if (!driverKey.empty())
+            {
+                const std::string driverPath =
+                    "SYSTEM\\CurrentControlSet\\Control\\Class\\" +
+                    driverKey;
+
+                std::string driverVersion =
+                    readRegistryString(
+                        HKEY_LOCAL_MACHINE,
+                        driverPath,
+                        "DriverVersion"
+                    );
+
+                if (!driverVersion.empty())
+                {
+                    device.driverVersion = driverVersion;
+                }
+
+                std::string driverDate =
+                    readRegistryString(
+                        HKEY_LOCAL_MACHINE,
+                        driverPath,
+                        "DriverDate"
+                    );
+
+                if (!driverDate.empty())
+                {
+                    device.driverDate = driverDate;
+                }
+
+                std::string driverProvider =
+                    readRegistryString(
+                        HKEY_LOCAL_MACHINE,
+                        driverPath,
+                        "ProviderName"
+                    );
+
+                if (!driverProvider.empty())
+                {
+                    device.driverProvider = driverProvider;
+                }
+            }
+
             if (device.selectionKey.empty())
             {
                 device.selectionKey =
@@ -5962,6 +6718,105 @@ namespace
                 return a.name < b.name;
             }
         );
+
+        systemInfo.audioDevice = "--";
+        systemInfo.audioDriver = "--";
+        systemInfo.chipsetDriver = "--";
+        systemInfo.networkDriver = "--";
+
+        const std::string cpuUpper =
+            toUpperCopy(systemInfo.cpuName);
+
+        const bool cpuIsAmd =
+            cpuUpper.find("AMD") != std::string::npos;
+
+        const bool cpuIsIntel =
+            cpuUpper.find("INTEL") != std::string::npos;
+
+        const std::string activeNetworkUpper =
+            toUpperCopy(systemInfo.networkAdapter);
+
+        for (const ConnectedDeviceInfo& device :
+             systemInfo.connectedDevices)
+        {
+            const std::string classUpper =
+                toUpperCopy(device.deviceClass);
+
+            const std::string nameUpper =
+                toUpperCopy(device.name);
+
+            const std::string manufacturerUpper =
+                toUpperCopy(device.manufacturer);
+
+            const std::string driverText =
+                device.driverVersion != "--"
+                ? device.name + " " +
+                    device.driverVersion
+                : "--";
+
+            if (
+                systemInfo.audioDevice == "--" &&
+                (
+                    classUpper == "MEDIA" ||
+                    classUpper == "AUDIOENDPOINT" ||
+                    nameUpper.find("AUDIO") != std::string::npos ||
+                    nameUpper.find("SOUND") != std::string::npos
+                )
+            )
+            {
+                systemInfo.audioDevice = device.name;
+
+                if (driverText != "--")
+                {
+                    systemInfo.audioDriver = driverText;
+                }
+            }
+
+            if (
+                (
+                    classUpper == "NET" ||
+                    classUpper == "NETSERVICE"
+                ) &&
+                device.driverVersion != "--"
+            )
+            {
+                bool matchesActiveAdapter =
+                    !activeNetworkUpper.empty() &&
+                    activeNetworkUpper != "--" &&
+                    (
+                        activeNetworkUpper.find(nameUpper) !=
+                            std::string::npos ||
+                        nameUpper.find(activeNetworkUpper) !=
+                            std::string::npos
+                    );
+
+                if (matchesActiveAdapter)
+                {
+                    systemInfo.networkDriver = driverText;
+                }
+                else if (systemInfo.networkDriver == "--")
+                {
+                    systemInfo.networkDriver = driverText;
+                }
+            }
+
+            if (
+                systemInfo.chipsetDriver == "--" &&
+                classUpper == "SYSTEM" &&
+                device.driverVersion != "--" &&
+                (
+                    (cpuIsAmd &&
+                     manufacturerUpper.find("AMD") !=
+                        std::string::npos) ||
+                    (cpuIsIntel &&
+                     manufacturerUpper.find("INTEL") !=
+                        std::string::npos)
+                )
+            )
+            {
+                systemInfo.chipsetDriver = driverText;
+            }
+        }
     }
 
 
@@ -6006,24 +6861,10 @@ namespace
 
         if (!displayVersion.empty())
         {
+            // Keep Version and Build separate so the System Information
+            // page can present them exactly like Windows does.
             systemInfo.osVersion =
                 displayVersion;
-
-            if (!buildNumber.empty())
-            {
-                systemInfo.osVersion +=
-                    " (" +
-                    buildNumber;
-
-                if (ubr > 0)
-                {
-                    systemInfo.osVersion +=
-                        "." +
-                        std::to_string(ubr);
-                }
-
-                systemInfo.osVersion += ")";
-            }
         }
 
         if (!buildNumber.empty())
@@ -6082,6 +6923,132 @@ namespace
         {
             systemInfo.computerName =
                 computerName;
+        }
+
+        DWORD secureBootEnabled = 0;
+
+        if (readRegistryDword(
+                HKEY_LOCAL_MACHINE,
+                "SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State",
+                "UEFISecureBootEnabled",
+                secureBootEnabled
+            ))
+        {
+            systemInfo.secureBoot =
+                secureBootEnabled != 0
+                ? "Enabled"
+                : "Disabled";
+        }
+
+        std::string dotNetVersion =
+            readRegistryString(
+                HKEY_LOCAL_MACHINE,
+                "SOFTWARE\\dotnet\\Setup\\InstalledVersions\\x64\\sharedhost",
+                "Version"
+            );
+
+        if (dotNetVersion.empty())
+        {
+            dotNetVersion =
+                readRegistryString(
+                    HKEY_LOCAL_MACHINE,
+                    "SOFTWARE\\dotnet\\Setup\\InstalledVersions\\x86\\sharedhost",
+                    "Version"
+                );
+        }
+
+        if (!dotNetVersion.empty())
+        {
+            systemInfo.dotNetRuntime = dotNetVersion;
+        }
+
+        std::string lastUpdate =
+            readRegistryString(
+                HKEY_LOCAL_MACHINE,
+                "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\Results\\Install",
+                "LastSuccessTime"
+            );
+
+        if (!lastUpdate.empty())
+        {
+            // Windows normally stores this as an ISO-like timestamp.
+            // Keep only the real calendar date when that format is present.
+            if (
+                lastUpdate.size() >= 10 &&
+                lastUpdate[4] == '-' &&
+                lastUpdate[7] == '-'
+            )
+            {
+                static const char* monthNames[] =
+                {
+                    "",
+                    "Jan", "Feb", "Mar", "Apr",
+                    "May", "Jun", "Jul", "Aug",
+                    "Sep", "Oct", "Nov", "Dec"
+                };
+
+                int year = std::atoi(
+                    lastUpdate.substr(0, 4).c_str()
+                );
+
+                int month = std::atoi(
+                    lastUpdate.substr(5, 2).c_str()
+                );
+
+                int day = std::atoi(
+                    lastUpdate.substr(8, 2).c_str()
+                );
+
+                if (
+                    month >= 1 &&
+                    month <= 12 &&
+                    day >= 1 &&
+                    day <= 31
+                )
+                {
+                    systemInfo.lastWindowsUpdate =
+                        std::string(monthNames[month]) +
+                        " " +
+                        std::to_string(day) +
+                        ", " +
+                        std::to_string(year);
+                }
+                else
+                {
+                    systemInfo.lastWindowsUpdate = lastUpdate;
+                }
+            }
+            else
+            {
+                systemInfo.lastWindowsUpdate = lastUpdate;
+            }
+        }
+
+        DEVMODEA displayMode = {};
+        displayMode.dmSize = sizeof(displayMode);
+
+        if (EnumDisplaySettingsA(
+                nullptr,
+                ENUM_CURRENT_SETTINGS,
+                &displayMode
+            ))
+        {
+            std::ostringstream displayText;
+            displayText
+                << displayMode.dmPelsWidth
+                << " x "
+                << displayMode.dmPelsHeight;
+
+            if (displayMode.dmDisplayFrequency > 1)
+            {
+                displayText
+                    << " ("
+                    << displayMode.dmDisplayFrequency
+                    << " Hz)";
+            }
+
+            systemInfo.displayResolution =
+                displayText.str();
         }
 
         const std::string cpuKey =
@@ -6259,20 +7226,26 @@ namespace
             return;
         }
 
-        SYSTEM_INFO info = {};
-        GetNativeSystemInfo(&info);
+        static ULONG processorCount = 0;
 
-        ULONG processorCount =
-            info.dwNumberOfProcessors;
+        if (processorCount == 0)
+        {
+            SYSTEM_INFO info = {};
+            GetNativeSystemInfo(&info);
+            processorCount = info.dwNumberOfProcessors;
+        }
 
         if (processorCount == 0)
         {
             return;
         }
 
-        std::vector<ProcessorPerformanceInfoLocal> current(
-            processorCount
-        );
+        static std::vector<ProcessorPerformanceInfoLocal> current;
+
+        if (current.size() != processorCount)
+        {
+            current.resize(processorCount);
+        }
 
         ULONG returnLength = 0;
 
@@ -6443,6 +7416,7 @@ static std::string findSensorHelperPath()
   const std::vector<std::string> candidates =
 {
     base + "\\SysMonSensors.exe",
+    base + "\\SysMonSensors\\SysMonSensors.exe",
     base + "\\SysMonSensors\\bin\\x64\\Release\\net10.0\\SysMonSensors.exe",
     base + "\\SysMonSensors\\bin\\x64\\Debug\\net10.0\\SysMonSensors.exe",
     base + "\\SysMonSensors\\bin\\Release\\net10.0\\SysMonSensors.exe",
@@ -6888,7 +7862,7 @@ void refreshGpuStats(bool force)
     if (
         force ||
         lastGpuEnumerationTick == 0 ||
-        now - lastGpuEnumerationTick >= 5000
+        now - lastGpuEnumerationTick >= 15000
     )
     {
         enumerateGpuAdapters();
@@ -6908,6 +7882,9 @@ void refreshGpuStats(bool force)
         gpu.fanRpm = -1;
         gpu.powerW = -1.0;
         gpu.powerLimitW = -1.0;
+        gpu.coreClockMHz = -1.0;
+        gpu.memoryClockMHz = -1.0;
+        gpu.processes.clear();
     }
 
     updateGpuPdhMetrics();
@@ -6924,7 +7901,7 @@ void refreshNetworkStats(bool force)
     if (
         force ||
         lastNetworkEnumerationTick == 0 ||
-        now - lastNetworkEnumerationTick >= 5000
+        now - lastNetworkEnumerationTick >= 15000
     )
     {
         enumerateNetworkAdapters();
@@ -6936,7 +7913,7 @@ void refreshNetworkStats(bool force)
     if (
         force ||
         lastNetworkConnectionTick == 0 ||
-        now - lastNetworkConnectionTick >= 2000
+        now - lastNetworkConnectionTick >= 3000
     )
     {
         refreshActiveConnections();
@@ -7360,6 +8337,14 @@ void refreshTemperatureStats(bool force)
             temperatureStats.motherboardTemperatureC
         );
     }
+
+    if (temperatureStats.systemTemperatureC >= 0.0)
+    {
+        pushGpuHistory(
+            temperatureStats.systemTemperatureHistory,
+            temperatureStats.systemTemperatureC
+        );
+    }
 }
 
 
@@ -7374,15 +8359,28 @@ void refreshSystemInfo(bool force)
         force = true;
     }
 
+    // Network identity changes occasionally; connected PnP-device
+    // enumeration is much heavier (SetupAPI walks a large device tree), so
+    // do not run both every five seconds on the UI thread. WM_DEVICECHANGE
+    // still calls this function with force=true for immediate hot-plug updates.
     if (
         force ||
         lastSystemInfoDynamicTick == 0 ||
-        now - lastSystemInfoDynamicTick >= 5000
+        now - lastSystemInfoDynamicTick >= 10000
     )
     {
         queryNetworkInfo();
-        queryConnectedDevices();
         lastSystemInfoDynamicTick = now;
+    }
+
+    if (
+        force ||
+        lastConnectedDeviceTick == 0 ||
+        now - lastConnectedDeviceTick >= 60000
+    )
+    {
+        queryConnectedDevices();
+        lastConnectedDeviceTick = now;
     }
 }
 
@@ -7508,9 +8506,80 @@ void addRamHistorySample()
 }
 
 
-void updateStats()
+static void repeatDiskHistorySamples()
 {
-    // CPU
+    for (DiskStats& disk : diskStats)
+    {
+        pushDiskHistory(
+            disk.activeHistory,
+            disk.performanceValid ? disk.activeTimePercent : 0.0
+        );
+        pushDiskHistory(
+            disk.readHistory,
+            disk.performanceValid ? disk.readMBps : 0.0
+        );
+        pushDiskHistory(
+            disk.writeHistory,
+            disk.performanceValid ? disk.writeMBps : 0.0
+        );
+        pushDiskHistory(
+            disk.transferHistory,
+            disk.performanceValid
+                ? disk.readMBps + disk.writeMBps
+                : 0.0
+        );
+    }
+}
+
+static void repeatNetworkHistorySamples()
+{
+    for (NetworkStats& adapter : networkStats)
+    {
+        pushNetworkHistory(
+            adapter.downloadHistory,
+            adapter.downloadMbps
+        );
+        pushNetworkHistory(
+            adapter.uploadHistory,
+            adapter.uploadMbps
+        );
+    }
+}
+
+static void repeatTemperatureHistorySamples()
+{
+    if (temperatureStats.cpuTemperatureC >= 0.0)
+    {
+        pushGpuHistory(
+            temperatureStats.cpuTemperatureHistory,
+            temperatureStats.cpuTemperatureC
+        );
+    }
+
+    if (temperatureStats.motherboardTemperatureC >= 0.0)
+    {
+        pushGpuHistory(
+            temperatureStats.motherboardTemperatureHistory,
+            temperatureStats.motherboardTemperatureC
+        );
+    }
+
+    if (temperatureStats.systemTemperatureC >= 0.0)
+    {
+        pushGpuHistory(
+            temperatureStats.systemTemperatureHistory,
+            temperatureStats.systemTemperatureC
+        );
+    }
+}
+
+void updateStats(bool allowHeavy)
+{
+    // --------------------------------------------------------
+    // FAST METRICS - ALWAYS UPDATE
+    // --------------------------------------------------------
+    // These calls are cheap and keep the UI alive even if the user is
+    // continuously clicking, scrolling or typing.
     cpuUsage =
         getCpuUsage();
 
@@ -7518,7 +8587,6 @@ void updateStats()
     addCpuHistorySample();
 
 
-    // RAM
     MEMORYSTATUSEX memory = {};
     memory.dwLength =
         sizeof(memory);
@@ -7553,65 +8621,311 @@ void updateStats()
     addRamHistorySample();
 
 
-    // Keep the original C: capacity values for the dashboard/widget.
-    ULARGE_INTEGER freeAvailable = {};
-    ULARGE_INTEGER totalBytes = {};
-    ULARGE_INTEGER freeBytes = {};
+    // Uptime is effectively free, so never defer it.
+    uptimeSeconds =
+        GetTickCount64() / 1000;
 
-    if (GetDiskFreeSpaceExA(
-            "C:\\",
-            &freeAvailable,
-            &totalBytes,
-            &freeBytes
-        ))
+
+    // --------------------------------------------------------
+    // LIGHTWEIGHT HISTORY CONTINUITY WHEN INPUT IS BUSY
+    // --------------------------------------------------------
+    // Main.cpp may temporarily defer expensive Windows/hardware queries while
+    // the user is interacting. We still append the latest real readings so
+    // graph timing remains consistent and nothing appears frozen.
+    if (!allowHeavy)
     {
-        totalDiskGB =
-            totalBytes.QuadPart /
-            bytesPerGB;
-
-        double freeDiskGB =
-            freeBytes.QuadPart /
-            bytesPerGB;
-
-        usedDiskGB =
-            totalDiskGB -
-            freeDiskGB;
-
-        if (totalDiskGB > 0.0)
-        {
-            diskPercent =
-                static_cast<int>(
-                    (usedDiskGB /
-                     totalDiskGB) *
-                    100.0
-                );
-        }
+        repeatDiskHistorySamples();
+        sampleGpuHistories();
+        repeatNetworkHistorySamples();
+        repeatTemperatureHistorySamples();
+        return;
     }
 
 
-    // Physical-disk activity, transfer rate and metadata.
-    updateDiskPerformance();
+    // --------------------------------------------------------
+    // C: CAPACITY - SLOW CHANGING
+    // --------------------------------------------------------
+    static ULONGLONG lastDiskSpaceTick = 0;
+    const ULONGLONG diskSpaceNow = GetTickCount64();
+
+    if (
+        lastDiskSpaceTick == 0 ||
+        diskSpaceNow - lastDiskSpaceTick >= 2000
+    )
+    {
+        ULARGE_INTEGER freeAvailable = {};
+        ULARGE_INTEGER totalBytes = {};
+        ULARGE_INTEGER freeBytes = {};
+
+        if (GetDiskFreeSpaceExA(
+                "C:\\",
+                &freeAvailable,
+                &totalBytes,
+                &freeBytes
+            ))
+        {
+            totalDiskGB =
+                totalBytes.QuadPart /
+                bytesPerGB;
+
+            double freeDiskGB =
+                freeBytes.QuadPart /
+                bytesPerGB;
+
+            usedDiskGB =
+                totalDiskGB -
+                freeDiskGB;
+
+            if (totalDiskGB > 0.0)
+            {
+                diskPercent =
+                    static_cast<int>(
+                        (usedDiskGB /
+                         totalDiskGB) *
+                        100.0
+                    );
+            }
+        }
+
+        lastDiskSpaceTick = diskSpaceNow;
+    }
 
 
-    // GPU performance and hot-plug detection.
-    refreshGpuStats(false);
+    // --------------------------------------------------------
+    // STARTUP WARM-UP - ONE HEAVY CLASS PER TICK
+    // --------------------------------------------------------
+    // The previous implementation queried disk + GPU + temperature + network
+    // + system metadata in the very first update. That made application launch
+    // and the first interaction noticeably stall. Warm them incrementally.
+    static int startupHardwarePhase = 0;
+    static bool startupHardwareComplete = false;
+    static int hardwarePhase = 0;
+
+    if (!startupHardwareComplete)
+    {
+        switch (startupHardwarePhase)
+        {
+        case 0:
+            updateDiskPerformance();
+            sampleGpuHistories();
+            repeatNetworkHistorySamples();
+            repeatTemperatureHistorySamples();
+            break;
+
+        case 1:
+            refreshGpuStats(false);
+            repeatDiskHistorySamples();
+            repeatNetworkHistorySamples();
+            repeatTemperatureHistorySamples();
+            break;
+
+        case 2:
+            refreshTemperatureStats(false);
+            repeatDiskHistorySamples();
+            sampleGpuHistories();
+            repeatNetworkHistorySamples();
+            break;
+
+        case 3:
+            refreshNetworkStats(false);
+            repeatDiskHistorySamples();
+            sampleGpuHistories();
+            repeatTemperatureHistorySamples();
+            break;
+
+        default:
+            // Static/system metadata can be the slowest discovery pass, so it
+            // is deliberately last. The main UI has already been responsive
+            // for several frames by the time this runs.
+            refreshSystemInfo(false);
+            repeatDiskHistorySamples();
+            sampleGpuHistories();
+            repeatNetworkHistorySamples();
+            repeatTemperatureHistorySamples();
+            startupHardwareComplete = true;
+            break;
+        }
+
+        startupHardwarePhase++;
+        return;
+    }
 
 
-    // System / hardware overview. Static information is cached.
-    // Refresh this before temperatures so the sensor UI already
-    // knows the physical-core count for the current CPU.
-    refreshSystemInfo(false);
+    // --------------------------------------------------------
+    // NORMAL STAGGERED HARDWARE REFRESH
+    // --------------------------------------------------------
+    // Run only ONE hardware-backed collector per 500 ms heavy step.  The old
+    // pairing (disk+temperature or GPU+network) created short UI-thread bursts
+    // that were noticeable when switching pages. Each class still receives a
+    // fresh real sample about every two seconds while the other histories keep
+    // their time axis continuous by repeating the last measured value.
+    switch (hardwarePhase)
+    {
+    case 0:
+        updateDiskPerformance();
+        sampleGpuHistories();
+        repeatNetworkHistorySamples();
+        repeatTemperatureHistorySamples();
+        break;
+
+    case 1:
+        refreshGpuStats(false);
+        repeatDiskHistorySamples();
+        repeatNetworkHistorySamples();
+        repeatTemperatureHistorySamples();
+        break;
+
+    case 2:
+        refreshTemperatureStats(false);
+        repeatDiskHistorySamples();
+        sampleGpuHistories();
+        repeatNetworkHistorySamples();
+        break;
+
+    default:
+        refreshNetworkStats(false);
+        repeatDiskHistorySamples();
+        sampleGpuHistories();
+        repeatTemperatureHistorySamples();
+
+        // Internally cached; metadata discovery is slow-changing and only
+        // needs to be checked alongside the least-frequent phase.
+        refreshSystemInfo(false);
+        break;
+    }
+
+    hardwarePhase = (hardwarePhase + 1) % 4;
+}
+
+} // namespace StatsCollector
+
+// UI-owned state. Only completed snapshots are copied here on the UI thread.
+double cpuUsage = 0.0;
+std::vector<double> cpuHistory;
+std::vector<double> ramHistory;
+std::vector<double> cpuCoreUsage;
+double usedRamGB = 0.0;
+double totalRamGB = 0.0;
+int ramPercent = 0;
+
+double usedDiskGB = 0.0;
+double totalDiskGB = 0.0;
+int diskPercent = 0;
+
+std::vector<DiskStats> diskStats;
+std::vector<GpuStats> gpuStats;
+std::vector<NetworkStats> networkStats;
+std::vector<NetworkConnectionInfo> activeNetworkConnections;
+TemperatureStats temperatureStats;
+SystemInfoData systemInfo;
+
+ULONGLONG uptimeSeconds = 0;
 
 
-    // Real hardware sensors from SysMonSensors plus ACPI fallback.
-    refreshTemperatureStats(false);
 
+namespace
+{
+    struct StatsSnapshot
+    {
+        double cpuUsage;
+        std::vector<double> cpuHistory;
+        std::vector<double> ramHistory;
+        std::vector<double> cpuCoreUsage;
+        double usedRamGB;
+        double totalRamGB;
+        int ramPercent;
+        double usedDiskGB;
+        double totalDiskGB;
+        int diskPercent;
+        std::vector<DiskStats> diskStats;
+        std::vector<GpuStats> gpuStats;
+        std::vector<NetworkStats> networkStats;
+        std::vector<NetworkConnectionInfo> activeNetworkConnections;
+        TemperatureStats temperatureStats;
+        SystemInfoData systemInfo;
+        ULONGLONG uptimeSeconds;
+    };
 
-    // Network performance and adapter hot-plug detection.
-    refreshNetworkStats(false);
+    enum StatsRequest : unsigned
+    {
+        Sample = 1, Heavy = 2, System = 4, Gpu = 8, Network = 16, Temperature = 32
+    };
 
+    BackgroundSampler<StatsSnapshot>& statsSampler()
+    {
+        static BackgroundSampler<StatsSnapshot> sampler([](unsigned flags)
+        {
+            static bool bridgeStarted = false;
+            if (!bridgeStarted)
+            {
+                StatsCollector::startHardwareSensorBridge();
+                bridgeStarted = true;
+            }
+            if (flags & Sample) StatsCollector::updateStats((flags & Heavy) != 0);
+            if (flags & System) StatsCollector::refreshSystemInfo(true);
+            if (flags & Gpu) StatsCollector::refreshGpuStats(true);
+            if (flags & Network) StatsCollector::refreshNetworkStats(true);
+            if (flags & Temperature) StatsCollector::refreshTemperatureStats(true);
+            StatsSnapshot snapshot;
+            snapshot.cpuUsage = StatsCollector::cpuUsage;
+            snapshot.cpuHistory = StatsCollector::cpuHistory;
+            snapshot.ramHistory = StatsCollector::ramHistory;
+            snapshot.cpuCoreUsage = StatsCollector::cpuCoreUsage;
+            snapshot.usedRamGB = StatsCollector::usedRamGB;
+            snapshot.totalRamGB = StatsCollector::totalRamGB;
+            snapshot.ramPercent = StatsCollector::ramPercent;
+            snapshot.usedDiskGB = StatsCollector::usedDiskGB;
+            snapshot.totalDiskGB = StatsCollector::totalDiskGB;
+            snapshot.diskPercent = StatsCollector::diskPercent;
+            snapshot.diskStats = StatsCollector::diskStats;
+            snapshot.gpuStats = StatsCollector::gpuStats;
+            snapshot.networkStats = StatsCollector::networkStats;
+            snapshot.activeNetworkConnections = StatsCollector::activeNetworkConnections;
+            snapshot.temperatureStats = StatsCollector::temperatureStats;
+            snapshot.systemInfo = StatsCollector::systemInfo;
+            snapshot.uptimeSeconds = StatsCollector::uptimeSeconds;
+            return snapshot;
+        });
+        return sampler;
+    }
+}
 
-    // Uptime
-    uptimeSeconds =
-        GetTickCount64() / 1000;
+void updateStats(bool allowHeavy)
+{
+    static std::shared_ptr<const StatsSnapshot> displayed;
+    auto snapshot = statsSampler().latest();
+    if (snapshot && snapshot != displayed)
+    {
+        cpuUsage = snapshot->cpuUsage;
+        cpuHistory = snapshot->cpuHistory;
+        ramHistory = snapshot->ramHistory;
+        cpuCoreUsage = snapshot->cpuCoreUsage;
+        usedRamGB = snapshot->usedRamGB;
+        totalRamGB = snapshot->totalRamGB;
+        ramPercent = snapshot->ramPercent;
+        usedDiskGB = snapshot->usedDiskGB;
+        totalDiskGB = snapshot->totalDiskGB;
+        diskPercent = snapshot->diskPercent;
+        diskStats = snapshot->diskStats;
+        gpuStats = snapshot->gpuStats;
+        networkStats = snapshot->networkStats;
+        activeNetworkConnections = snapshot->activeNetworkConnections;
+        temperatureStats = snapshot->temperatureStats;
+        systemInfo = snapshot->systemInfo;
+        uptimeSeconds = snapshot->uptimeSeconds;
+        displayed = std::move(snapshot);
+    }
+    statsSampler().request(Sample | (allowHeavy ? Heavy : 0));
+}
+
+// Hot-plug notifications coalesce while a collector is busy.
+void refreshSystemInfo(bool) { statsSampler().request(System); }
+void refreshGpuStats(bool) { statsSampler().request(Gpu); }
+void refreshNetworkStats(bool) { statsSampler().request(Network); }
+void refreshTemperatureStats(bool) { statsSampler().request(Temperature); }
+bool startHardwareSensorBridge() { statsSampler().request(Sample); return true; }
+void stopHardwareSensorBridge()
+{
+    statsSampler().stop();
+    StatsCollector::stopHardwareSensorBridge();
 }

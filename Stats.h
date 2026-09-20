@@ -25,9 +25,24 @@ struct DiskStats
     double averageResponseMs = 0.0;
     double readMBps = 0.0;
     double writeMBps = 0.0;
+    double readOperationsPerSecond = 0.0;
+    double writeOperationsPerSecond = 0.0;
+
+    unsigned long long totalBytesRead = 0;
+    unsigned long long totalBytesWritten = 0;
 
     std::vector<double> activeHistory;
     std::vector<double> transferHistory;
+    std::vector<double> readHistory;
+    std::vector<double> writeHistory;
+};
+
+
+struct GpuProcessStats
+{
+    DWORD pid = 0;
+    double utilizationPercent = 0.0;
+    unsigned long long dedicatedMemoryBytes = 0;
 };
 
 
@@ -54,6 +69,8 @@ struct GpuStats
     int fanRpm = -1;
     double powerW = -1.0;
     double powerLimitW = -1.0;
+    double coreClockMHz = -1.0;
+    double memoryClockMHz = -1.0;
 
     std::string driverVersion = "--";
     std::string driverDate = "--";
@@ -68,6 +85,7 @@ struct GpuStats
     std::vector<double> encodeHistory;
     std::vector<double> decodeHistory;
     std::vector<double> temperatureHistory;
+    std::vector<GpuProcessStats> processes;
 };
 
 
@@ -94,6 +112,10 @@ struct NetworkStats
     std::string macAddress = "--";
     std::string defaultGateway = "--";
     std::string dnsServers = "--";
+    std::string subnetMask = "--";
+    std::string ssid = "--";
+    std::string wifiStandard = "--";
+    int signalQuality = -1;
 
     bool performanceValid = false;
     double linkSpeedMbps = 0.0;
@@ -150,6 +172,7 @@ struct TemperatureStats
 
     std::vector<double> cpuTemperatureHistory;
     std::vector<double> motherboardTemperatureHistory;
+    std::vector<double> systemTemperatureHistory;
 };
 
 
@@ -166,6 +189,9 @@ struct ConnectedDeviceInfo
     std::string productId = "--";
     std::string instanceId = "--";
     std::string hardwareId = "--";
+    std::string driverVersion = "--";
+    std::string driverDate = "--";
+    std::string driverProvider = "--";
     std::string selectionKey;
 };
 
@@ -182,6 +208,10 @@ struct SystemInfoData
     std::string experience = "--";
     std::string systemType = "--";
     std::string computerName = "--";
+    std::string secureBoot = "--";
+    std::string dotNetRuntime = "--";
+    std::string lastWindowsUpdate = "--";
+    std::string displayResolution = "--";
 
     // Processor
     std::string cpuName = "--";
@@ -225,6 +255,10 @@ struct SystemInfoData
     std::string networkConnectionType = "--";
     std::string ipv4Address = "--";
     std::string ipv6Address = "--";
+    std::string audioDevice = "--";
+    std::string audioDriver = "--";
+    std::string chipsetDriver = "--";
+    std::string networkDriver = "--";
 
     // Currently connected external / PnP devices
     std::vector<ConnectedDeviceInfo> connectedDevices;
@@ -255,10 +289,7 @@ extern std::vector<double> ramHistory;
 extern std::vector<double> cpuCoreUsage;
 
 
-double getCpuUsage();
-void updateStats();
-void addCpuHistorySample();
-void addRamHistorySample();
+void updateStats(bool allowHeavy = true);
 void refreshSystemInfo(bool force = false);
 void refreshGpuStats(bool force = false);
 void refreshNetworkStats(bool force = false);
