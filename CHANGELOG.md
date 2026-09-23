@@ -1,5 +1,32 @@
 # Changelog
+## [1.0.0] - 2026-09-23
 
+### Reliability
+- Improved shutdown and sensor-helper cleanup.
+- Added duplicate-instance prevention and Pause/Resume Monitoring.
+- Clarified close-to-tray behavior and expanded tray controls.
+
+### Features
+- Added four customizable overlay styles: Precision Rings, Telemetry Stack, Side Rail and Floating Tiles.
+- Added independent overlay metrics, optional backgrounds, opacity, scaling, always-on-top and remembered monitor positions.
+- Added reversible management of supported current-user startup entries.
+- Added settings validation, section resets, tooltips and sensor status.
+- Improved local diagnostics, support reports and update checking.
+
+### Interface
+- Improved Settings dropdowns and responsive layouts.
+- Fixed GPU and Network View All buttons.
+- Added higher-resolution process icons and active-column sorting arrows.
+- Corrected sidebar icons and added the taskbar logo.
+- Simplified System Healthy to a green dot and label.
+
+### Distribution
+- Organized all 28 PNG assets into the logos folder.
+- Added licensing, dependency notices, privacy, security and asset documentation.
+- Included corresponding third-party source material.
+- Removed debug symbols, local build paths and saved user settings from the release package.
+
+This Windows x64 release is unsigned.
 All notable SysMon changes are documented here.
 
 ## [1.0.0-rc7] - 2026-09-23
