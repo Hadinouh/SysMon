@@ -20,16 +20,17 @@ class Program
             cancellation.Cancel();
         };
 
-        computer.Open();
         try
         {
+            computer.Open();
             while (!cancellation.IsCancellationRequested)
             {
                 Console.WriteLine("SNAPSHOT_BEGIN");
 
                 foreach (IHardware hardware in computer.Hardware)
                 {
-                    ReadHardware(hardware);
+                    try { ReadHardware(hardware); }
+                    catch (Exception) { Console.WriteLine("ERROR|Hardware sensor unavailable"); }
                 }
 
                 Console.WriteLine("SNAPSHOT_END");
@@ -39,9 +40,11 @@ class Program
                     break;
             }
         }
+        catch (IOException) { /* Parent closed the pipe. */ }
+        catch (Exception) { try { Console.Error.WriteLine("ERROR|Sensor initialization failed"); } catch { } }
         finally
         {
-            computer.Close();
+            try { computer.Close(); } catch { }
         }
     }
 

@@ -2,6 +2,10 @@
 #include "SettingsRuntime.h"
 #include "UpdateChecker.h"
 #include "Version.h"
+#include "AppLifecycle.h"
+#include "StartupManager.h"
+#include "SettingsDropdown.h"
+#include "ProcessDetails.h"
 #include "Theme.h"
 #include <windows.h>
 #include <shellapi.h>
@@ -87,7 +91,7 @@ static SysMonUiTransform getSysMonUiTransform(
     // Keep vertical sizing and typography bounded; use spare horizontal
     // space for wider panels and plots. UI primitives preserve glyphs,
     // gauges and icons independently from this layout transform.
-    transform.scale = (std::min)(transform.scale, 1.75);
+    transform.scale = (std::min)(transform.scale, (std::max)(1.75, GetDpiForWindow(hwnd)/96.0));
     transform.scaleX = (std::max)(transform.scale, scaleX);
     transform.drawWidth = clientWidth;
 
@@ -688,8 +692,12 @@ static HICON sysMonTaskbarIcon = nullptr;
 
 static HICON loadSysMonTaskbarIcon()
 {
+    HICON embedded = static_cast<HICON>(LoadImageW(
+        GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1), IMAGE_ICON,
+        GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0));
+    if (embedded) return embedded;
     Gdiplus::Bitmap logo(
-        L"logo.png"
+        L"logos/logo.png"
     );
 
     if (logo.GetLastStatus() != Gdiplus::Ok)
@@ -1458,13 +1466,20 @@ static void openSettingsTarget(HWND hwnd, const char* target)
 
 static int chooseSetting(HWND hwnd, int current, const std::vector<std::pair<int,std::string>>& choices)
 {
-    HMENU menu=CreatePopupMenu(); if(!menu) return current;
-    for(size_t i=0;i<choices.size();++i)
-        AppendMenuA(menu,MF_STRING|(choices[i].first==current?MF_CHECKED:0),12000+i,choices[i].second.c_str());
-    POINT point{}; GetCursorPos(&point);
-    const int selected=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,point.x,point.y,0,hwnd,nullptr);
-    DestroyMenu(menu);
-    return selected>=12000 && selected<12000+static_cast<int>(choices.size()) ? choices[selected-12000].first : current;
+    namespace SL=SettingsLayout;
+    POINT cursor{};GetCursorPos(&cursor);POINT client=cursor;ScreenToClient(hwnd,&client);
+    const auto logical=sysMonClientToLogicalPoint(hwnd,MAKELPARAM(client.x,client.y));
+    const auto transform=getSysMonUiTransform(hwnd);
+    RECT anchor{cursor.x,cursor.y,cursor.x+140,cursor.y+1};
+    const SL::Rect fields[]={SL::comboRect(0,SL::topRowTop,3),SL::comboRect(1,SL::topRowTop,0),SL::comboRect(1,SL::topRowTop,1),SL::comboRect(1,SL::topRowTop,2),SL::comboRect(2,SL::topRowTop,4),SL::comboRect(1,SL::middleRowTop,1),SL::valueRect(0,SL::middleRowTop,0),SL::valueRect(0,SL::middleRowTop,1),SL::valueRect(0,SL::middleRowTop,2),SL::valueRect(0,SL::middleRowTop,3)};
+    for(const auto& field:fields)if(logical.x-165>=field.left&&logical.x-165<=field.right&&logical.y+settingsScrollOffset>=field.top&&logical.y+settingsScrollOffset<=field.bottom){
+        POINT corner{static_cast<LONG>((field.left+165)*transform.scaleX+transform.offsetX),static_cast<LONG>((field.top-settingsScrollOffset)*transform.scale+transform.offsetY)};
+        POINT end{static_cast<LONG>((field.right+165)*transform.scaleX+transform.offsetX),static_cast<LONG>((field.bottom-settingsScrollOffset)*transform.scale+transform.offsetY)};
+        ClientToScreen(hwnd,&corner);ClientToScreen(hwnd,&end);anchor={corner.x,corner.y,end.x,end.y};break;
+    }
+    auto available=choices;
+    if(std::none_of(available.begin(),available.end(),[&](const auto& choice){return choice.first==current;}))available.insert(available.begin(),{current,std::to_string(current)+" (current)"});
+    return SettingsDropdown::show(hwnd,anchor,current,available);
 }
 
 static void pollSettingsServices(HWND hwnd)
@@ -1516,7 +1531,36 @@ LRESULT CALLBACK WindowProc(
     }
     switch (message)
     {
-    case WM_SETTINGCHANGE:
+    case WM_MEASUREITEM:
+        if(SettingsDropdown::measure(reinterpret_cast<MEASUREITEMSTRUCT*>(lParam)))return TRUE;
+        break;
+    case WM_DRAWITEM:
+        if(SettingsDropdown::draw(reinterpret_cast<DRAWITEMSTRUCT*>(lParam)))return TRUE;
+        break;
+    case WM_CONTEXTMENU:
+    if(currentPage==AppPage::Settings) {
+        HMENU menu=CreatePopupMenu();AppendMenuA(menu,MF_STRING,1,"Check for updates now");AppendMenuA(menu,MF_STRING,2,"Version and release notes");AppendMenuA(menu,MF_STRING,3,"Open GitHub Release");AppendMenuA(menu,MF_STRING,4,"Dependencies and licenses");
+        POINT cursor;GetCursorPos(&cursor);int command=TrackPopupMenu(menu,TPM_RETURNCMD,cursor.x,cursor.y,0,hwnd,nullptr);DestroyMenu(menu);
+        if(command==1){Updates::sampler().request();Updates::pending=true;Updates::status="Checking GitHub releases...";}
+        if(command==2){std::string details="Current version: " SYSMON_VERSION_STRING "\nLatest version: ";details+=Updates::displayed?Updates::displayed->version:"Not checked";details+="\n\n";details+=Updates::displayed?Updates::displayed->status:"Choose Check for updates now first.";if(Updates::displayed)details+="\n\nRelease notes:\n"+Updates::displayed->notes;MessageBoxA(hwnd,details.c_str(),"SysMon updates",MB_OK|MB_ICONINFORMATION);}
+        if(command==3)ShellExecuteA(hwnd,"open",Updates::releasePage,nullptr,nullptr,SW_SHOWNORMAL);
+        if(command==4)openSettingsTarget(hwnd,(getSettingsPath().substr(0,getSettingsPath().find_last_of("\\/"))+"\\THIRD-PARTY-NOTICES.txt").c_str());
+        return 0;
+    }
+    break;
+case WM_KEYDOWN:
+    if(GetKeyState(VK_CONTROL)&0x8000) {
+        if(wParam=='Q') {DestroyWindow(hwnd);return 0;}
+        if(wParam=='P') {setMonitoringPaused(!monitoringPaused);InvalidateRect(hwnd,nullptr,FALSE);return 0;}
+        if(wParam==VK_OEM_COMMA) {currentPage=AppPage::Settings;InvalidateRect(hwnd,nullptr,FALSE);return 0;}
+    }
+    break;
+case WM_DPICHANGED: {
+    const RECT* bounds=reinterpret_cast<RECT*>(lParam);
+    SetWindowPos(hwnd,nullptr,bounds->left,bounds->top,bounds->right-bounds->left,bounds->bottom-bounds->top,SWP_NOZORDER|SWP_NOACTIVATE);
+    InvalidateRect(hwnd,nullptr,FALSE); return 0;
+}
+case WM_SETTINGCHANGE:
     case WM_THEMECHANGED:
         if (appSettings.theme==2) applyThemeToWindow(hwnd);
         return 0;
@@ -1734,6 +1778,27 @@ case WM_LBUTTONUP:
 }
 case WM_MOUSEMOVE:
 {
+    static HWND tips=nullptr;static std::string tipText;
+    if(!tips) {
+        tips=CreateWindowExA(WS_EX_TOPMOST,TOOLTIPS_CLASSA,nullptr,WS_POPUP|TTS_ALWAYSTIP,0,0,0,0,hwnd,nullptr,GetModuleHandle(nullptr),nullptr);
+        TOOLINFOA info{};info.cbSize=sizeof(info);info.uFlags=TTF_IDISHWND|TTF_SUBCLASS;info.hwnd=hwnd;info.uId=reinterpret_cast<UINT_PTR>(hwnd);info.lpszText=const_cast<char*>("");SendMessageA(tips,TTM_ADDTOOLA,0,reinterpret_cast<LPARAM>(&info));
+        SendMessage(tips,TTM_SETMAXTIPWIDTH,0,360);SendMessage(tips,TTM_SETDELAYTIME,TTDT_INITIAL,650);
+    }
+    std::string next;
+    if(currentPage==AppPage::Settings) {
+        POINT logical=sysMonClientToLogicalPoint(hwnd,lParam);int x=logical.x-165,y=logical.y+settingsScrollOffset;
+        if(logical.y>=SettingsLayout::clipTop && logical.y<=SettingsLayout::clipBottom) {
+            auto over=[&](int column,int top,int row){auto r=SettingsLayout::rowBand(column,top,row);return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom;};
+            if(over(0,SettingsLayout::topRowTop,1))next="X hides SysMon in the tray when enabled. Tray Exit and Ctrl+Q always close the application.";
+            if(over(0,SettingsLayout::topRowTop,2))next="Checks GitHub without installing anything. Right-click Settings for version details, release notes, and manual checks.";
+            if(over(1,SettingsLayout::topRowTop,0))next="One refresh interval controls monitoring. Slower intervals reduce collection work.";
+            if(over(1,SettingsLayout::middleRowTop,1))next="Old SysMon monitoring and alert logs are removed after this many days. Other files are left alone.";
+            if(over(2,SettingsLayout::middleRowTop,1))next="Choose appearance and metrics independently. Always on top keeps the overlay above other windows. Position memory restores its saved monitor.";
+            if(over(2,SettingsLayout::middleRowTop,2))next="Unavailable can mean unsupported hardware or a missing sensor helper. Open Details or export a Support Report.";
+        }
+    }
+    if(next!=tipText) {tipText=next;TOOLINFOA info{};info.cbSize=sizeof(info);info.hwnd=hwnd;info.uId=reinterpret_cast<UINT_PTR>(hwnd);info.lpszText=tipText.data();SendMessageA(tips,TTM_UPDATETIPTEXTA,0,reinterpret_cast<LPARAM>(&info));if(tipText.empty())SendMessage(tips,TTM_POP,0,0);}
+
     if (settingsTransparencyDragging) {
         if (!(wParam & MK_LBUTTON)) { settingsTransparencyDragging=false; ReleaseCapture(); return 0; }
         const POINT point=sysMonClientToLogicalPoint(hwnd,lParam);
@@ -2386,6 +2451,16 @@ case WM_LBUTTONDOWN:
         }
     }
     // --------------------------------------------------------
+    // GPU / NETWORK - complete metric-specific process lists.
+    if(currentPage==AppPage::Performance) {
+        // Detail content is drawn below a 103-unit vertical viewport offset.
+        if(performanceView==PerformanceView::GPU && mouseX>=735 && mouseX<=823 && mouseY>=527 && mouseY<=561) {
+            ProcessDetails::show(hwnd,ProcessDetails::Kind::Gpu,selectedGpuIndex);return 0;
+        }
+        if(performanceView==PerformanceView::Network && mouseX>=765 && mouseX<=850 && mouseY>=554 && mouseY<=583) {
+            ProcessDetails::show(hwnd,ProcessDetails::Kind::Network,selectedGpuIndex);return 0;
+        }
+    }
     // CPU / MEMORY - VIEW ALL PROCESSES
     // --------------------------------------------------------
 
@@ -2997,8 +3072,15 @@ if (
             sysMonSettingsSaveDue = false;
             KillTimer(hwnd, 5);
 
-            resetAppSettings();
-            applySavedStartupPreference(hwnd);
+            HMENU resetMenu=CreatePopupMenu();
+            const char* sections[]={"All settings","General","Monitoring","Appearance","Alerts","Data","Overlay"};
+            for(int section=0;section<7;++section)AppendMenuA(resetMenu,MF_STRING,section+1,sections[section]);
+            POINT cursor;GetCursorPos(&cursor);
+            int selection=TrackPopupMenu(resetMenu,TPM_RETURNCMD,cursor.x,cursor.y,0,hwnd,nullptr);DestroyMenu(resetMenu);
+            if(!selection)return 0;
+            resetSettingsSection(selection-1);
+            if(selection<=2)applySavedStartupPreference(hwnd);
+            if(!saveAppSettings())MessageBoxA(hwnd,"Could not save reset preferences.","SysMon",MB_OK|MB_ICONWARNING);
             applyThemeToWindow(hwnd);
             Updates::poll(appSettings.checkForUpdates);
             applyMainWindowTransparency(hwnd);
@@ -3055,16 +3137,9 @@ if (
 
         if (inCardRect(SL::comboRect(0, SL::topRowTop, 3)))
         {
-            HMENU menu=CreatePopupMenu();
-            if (!menu) return 0;
-            const wchar_t* choices[]={L"Dark",L"Light",L"Follow Windows"};
-            for (int i=0;i<3;++i)
-                AppendMenuW(menu,MF_STRING|(appSettings.theme==i ? MF_CHECKED : 0),11001+i,choices[i]);
-            POINT point={}; GetCursorPos(&point);
-            UINT choice=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY|TPM_RIGHTBUTTON,point.x,point.y,0,hwnd,nullptr);
-            DestroyMenu(menu);
-            if (choice>=11001 && choice<=11003) {
-                appSettings.theme=static_cast<int>(choice-11001);
+            const int choice=chooseSetting(hwnd,appSettings.theme,{{0,"Dark"},{1,"Light"},{2,"Follow Windows"}});
+            if (choice!=appSettings.theme) {
+                appSettings.theme=choice;
                 requestSettingsSave(hwnd);
                 applyThemeToWindow(hwnd);
             }
@@ -3074,7 +3149,7 @@ if (
         // ---- Monitoring Settings -------------------------
         if (inCardRect(SL::comboRect(1, SL::topRowTop, 0)))
         {
-            appSettings.updateIntervalMs=chooseSetting(hwnd,appSettings.updateIntervalMs,{{500,"500 ms"},{1000,"1 second"},{2000,"2 seconds"},{5000,"5 seconds"}});
+            appSettings.updateIntervalMs=chooseSetting(hwnd,appSettings.updateIntervalMs,{{250,"250 ms"},{500,"500 ms"},{1000,"1 second"},{2000,"2 seconds"},{5000,"5 seconds"},{10000,"10 seconds"}});
 
             requestSettingsSave(hwnd);
             restartMonitoringTimer(hwnd);
@@ -3274,8 +3349,7 @@ if (
         }
 
         if (inCardRect(SL::buttonRect(2, SL::middleRowTop, 1, 124))) {
-            appSettings.showOverlayWidget = !appSettings.showOverlayWidget;
-            applyOverlayWidgetSetting(); saveAndPaint(); return 0;
+            configureOverlay(hwnd); saveAndPaint(); return 0;
         }
 
         // ---- System Integration --------------------------
@@ -3291,7 +3365,7 @@ if (
 
         if (inCardRect(SL::buttonRect(2, SL::middleRowTop, 2, 112)))
         {
-            MessageBoxA(hwnd,"SysMon is already running as administrator.","SysMon",MB_OK|MB_ICONINFORMATION);
+            MessageBoxA(hwnd,temperatureStats.hardwareSensorAvailable?"Sensors: Active\nHardware sensors are responding.":"Sensors: Unavailable\nSome hardware may not expose sensors. Check that the SysMonSensors folder is beside SysMon.exe. Diagnostic events are in the data folder.","Sensor status",MB_OK|MB_ICONINFORMATION);
             return 0;
 
 
@@ -3368,6 +3442,9 @@ if (
             return 0;
         }
 
+        if(inCardRect(SL::rowBand(0,SL::aboutPanelTop,1))) {
+            openSettingsTarget(hwnd,(getSettingsPath().substr(0,getSettingsPath().find_last_of("\\/"))+"\\THIRD-PARTY-NOTICES.txt").c_str());return 0;
+        }
         // ---- Support -------------------------------------
         if (inCardRect(SL::buttonRect(2, SL::supportPanelTop, 0, 112)))
         {
@@ -3380,7 +3457,15 @@ if (
             std::ofstream report(getSysMonDataFolderPath()+"\\SysMon-support.txt");
             report << "SysMon support report\nVersion: " << SYSMON_VERSION_STRING << "\nDescribe the issue and steps to reproduce:\n\n"
                 << "Theme: " << appSettings.theme << "\nUpdate interval: " << appSettings.updateIntervalMs
-                << " ms\nLogging: " << appSettings.enableDataLogging << "\n";
+                << " ms\nLogging: " << appSettings.enableDataLogging << "\n"
+                << "Windows: " << systemInfo.osName << " " << systemInfo.osVersion << " build " << systemInfo.osBuild << "\n"
+                << "CPU: " << systemInfo.cpuName << "\nGPU: " << systemInfo.gpuName << "\n"
+                << "Sensors: " << (temperatureStats.hardwareSensorAvailable?"Active":"Unavailable") << "\n"
+                << "Monitoring: " << (monitoringPaused?"Paused":"Active") << "\n\nRecent diagnostic events (no paths, addresses, or serial numbers):\n";
+            std::ifstream diagnostics(getSysMonDataFolderPath()+"\\SysMon.log");
+            std::deque<std::string> recent;std::string event;
+            while(std::getline(diagnostics,event)) {recent.push_back(event);if(recent.size()>40)recent.pop_front();}
+            for(const auto& line:recent) report<<line<<"\n";
             report.close();
             if(!report) { MessageBoxA(hwnd,"Could not save the report.","SysMon",MB_OK|MB_ICONWARNING); return 0; }
 
@@ -3610,10 +3695,7 @@ if (
 
         if (inRect(837, 199, 1003, 222))
         {
-            if (!launchWindowsTarget(hwnd, L"ms-settings:startupapps"))
-            {
-                MessageBoxA(hwnd, "Unable to open Startup Apps settings.", "SysMon", MB_OK | MB_ICONERROR);
-            }
+            StartupManager::show(hwnd);
             return 0;
         }
 
@@ -4661,7 +4743,7 @@ case WM_TIMER:
 {
     if (wParam==8) { KillTimer(hwnd,8); if(!appSettings.showInTray && IsWindowVisible(hwnd)) removeTrayIcon(); return 0; }
     if (wParam==7) {
-        pollSettingsServices(hwnd);
+        if (!monitoringPaused) pollSettingsServices(hwnd);
         const std::string previous=Updates::status;
         Updates::poll(appSettings.checkForUpdates);
         if(previous!=Updates::status && currentPage==AppPage::Settings)
@@ -4740,6 +4822,7 @@ case WM_TIMER:
 
     if (wParam == 1)
     {
+        if (monitoringPaused) return 0;
         // Keep live edge/corner dragging responsive.
         if (sysMonLiveResizing)
         {
@@ -4894,6 +4977,10 @@ case WM_TRAYICON:
             "Open SysMon"
         );
 
+        AppendMenuA(menu,MF_STRING|(appSettings.showOverlayWidget?MF_CHECKED:0),6001,"Show Overlay");
+        AppendMenuA(menu,MF_STRING,6002,monitoringPaused?"Resume Monitoring":"Pause Monitoring");
+        AppendMenuA(menu,MF_STRING,6003,"Settings");
+        AppendMenuA(menu,MF_STRING,6004,"Configure Overlay");
         AppendMenuA(
             menu,
             MF_SEPARATOR,
@@ -4931,6 +5018,10 @@ case WM_TRAYICON:
             menu
         );
 
+        if(command==6001) { appSettings.showOverlayWidget=!appSettings.showOverlayWidget;applyOverlayWidgetSetting();saveAppSettings(); }
+        if(command==6002) { setMonitoringPaused(!monitoringPaused);InvalidateRect(hwnd,nullptr,FALSE); }
+        if(command==6003) {currentPage=AppPage::Settings;restoreSysMon(hwnd);}
+        if(command==6004) configureOverlay(hwnd);
         if (
             command ==
             ID_TRAY_OPEN
@@ -5451,6 +5542,12 @@ case WM_SIZING:
 
 
    case WM_DESTROY:
+    AppLifecycle::log("Shutdown requested");
+    AppLifecycle::beginShutdown();
+    for (UINT_PTR timer=1;timer<=8;++timer) KillTimer(hwnd,timer);
+    UnregisterHotKey(hwnd,1);
+    if (desktopWidget) { KillTimer(desktopWidget,2); DestroyWindow(desktopWidget); desktopWidget=nullptr; }
+    removeTrayIcon();
     SettingsRuntime::logs.stop();
 {
     flushPendingSettingsSave(hwnd);
@@ -5509,6 +5606,8 @@ case WM_SIZING:
     }
 
 removeTrayIcon();
+    AppLifecycle::log("Shutdown completed");
+    if(AppLifecycle::shutdownDone)SetEvent(AppLifecycle::shutdownDone);
     PostQuitMessage(0);
 
     return 0;
@@ -5534,13 +5633,21 @@ int WINAPI WinMain(
     LPSTR,
     int nCmdShow)
 {
+    if (!AppLifecycle::acquireInstance()) return 0;
+    // Assets and helper files belong to this executable, regardless of shortcut working directory.
+    wchar_t executablePath[32768]{};
+    if (GetModuleFileNameW(nullptr,executablePath,32768)) {
+        std::wstring directory=executablePath;auto separator=directory.find_last_of(L"\\/");
+        if(separator!=std::wstring::npos)SetCurrentDirectoryW(directory.substr(0,separator).c_str());
+    }
+    AppLifecycle::initializeLog(getSysMonDataFolderPath());
     GdiplusStartupInput gdiplusStartupInput;
     GdiplusStartup(
         &gdiplusToken,
         &gdiplusStartupInput,
         nullptr
     );
-    SetProcessDPIAware();
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     const char CLASS_NAME[] =
         "SysMonWindowClass";
@@ -5681,13 +5788,6 @@ desktopWidget =
 
 if (desktopWidget != nullptr)
 {
-    SetLayeredWindowAttributes(
-        desktopWidget,
-        WIDGET_TRANSPARENT,
-        0,
-        LWA_COLORKEY
-    );
-
     // Load saved widget position
     loadWidgetSettings();
 
@@ -5706,10 +5806,12 @@ if (desktopWidget != nullptr)
         nCmdShow
     );
 
-    UpdateWindow(
-        hwnd
-    );
-
+    UpdateWindow(hwnd);
+    const std::string preferences=getSettingsPath();
+    if(!GetPrivateProfileIntA("General","WelcomeShown",0,preferences.c_str())) {
+        MessageBoxA(hwnd,"Welcome to SysMon.\n\nBy default, X minimizes SysMon to the tray. Use tray > Exit or Ctrl+Q to fully close it.\n\nCtrl+P pauses monitoring. Ctrl+Alt+O toggles the overlay. Drag the overlay to move it; right-click it to customize.\n\nRight-click Settings for updates and licenses. Reset to Defaults can reset one section or everything.","Welcome to SysMon",MB_OK|MB_ICONINFORMATION);
+        WritePrivateProfileStringA("General","WelcomeShown","1",preferences.c_str());
+    }
 
     MSG msg = {};
 
@@ -5717,8 +5819,10 @@ if (desktopWidget != nullptr)
     &msg,
     nullptr,
     0,
-    0))
+    0) > 0)
 {
+    if (StartupManager::window && IsDialogMessage(StartupManager::window,&msg)) continue;
+    if (ProcessDetails::window && IsDialogMessage(ProcessDetails::window,&msg)) continue;
     TranslateMessage(
         &msg
     );

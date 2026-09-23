@@ -4,6 +4,7 @@
 #include "Theme.h"
 #include "ProcessMetadata.h"
 #include "UI.h"
+#include "SidebarIcons.h"
 #include "Settings.h"
 #include "Stats.h"
 #include "Widget.h"
@@ -3007,7 +3008,7 @@ namespace
         }
 
         const bool exists =
-            GetFileAttributesW(filePath) != INVALID_FILE_ATTRIBUTES;
+            GetFileAttributesW((std::wstring(L"logos/") + filePath).c_str()) != INVALID_FILE_ATTRIBUTES;
 
         cachedAssetAvailability.push_back(
             { filePath, exists }
@@ -3023,9 +3024,9 @@ namespace
         return processMetadata.path(pid);
     }
 
-    HICON getCachedProcessIcon(DWORD pid)
+    HICON getCachedProcessIcon(DWORD pid, int size)
     {
-        return processMetadata.icon(pid);
+        return processMetadata.icon(pid, true, scaleUiCoordinate(size));
     }
 
     void drawProcessExecutableIconCachedOnly(
@@ -3055,7 +3056,7 @@ namespace
         }
 
         HICON icon =
-            getCachedProcessIcon(pid);
+            getCachedProcessIcon(pid, size);
 
         if (icon == nullptr)
         {
@@ -3086,7 +3087,7 @@ namespace
         int y,
         int size)
     {
-        HICON icon = processMetadata.icon(pid, false);
+        HICON icon = processMetadata.icon(pid, false, scaleUiCoordinate(size));
         if (icon) drawUiIcon(hdc, x, y, icon, size, size, 0, nullptr, DI_NORMAL);
     }
 
@@ -3116,7 +3117,7 @@ namespace
 
         auto bitmap =
             std::make_unique<Gdiplus::Bitmap>(
-                filePath
+                (std::wstring(L"logos/") + filePath).c_str()
             );
 
         if (bitmap->GetLastStatus() != Gdiplus::Ok)
@@ -3418,6 +3419,10 @@ static bool drawTintedPngImage(
     int height,
     COLORREF tint)
 {
+    if (filePath && wcsncmp(filePath, L"sidebar_", 8) == 0) {
+        ScopedUiGraphics symbols(hdc, x + width * 0.5f, true);
+        if (drawSidebarSymbol(symbols.get(), filePath, x, y, width, height, tint)) return true;
+    }
     Gdiplus::Bitmap* image =
         getCachedTintedPngImage(
             filePath,
@@ -4211,6 +4216,26 @@ static bool isWindowsSystemProcess(
 }
 
 
+static void drawProcessSortHeader(HDC hdc, const char* label, int x, int y,
+    int arrowOffset, ProcessSort column, COLORREF normalColor)
+{
+    const bool active = processSort == column;
+    const COLORREF color = active ? uiColor(RGB(0, 200, 255)) : normalColor;
+    drawText(hdc, label, x, y, color, smallFont);
+    if (!active) return;
+    ScopedUiGraphics scoped(hdc, x + arrowOffset + 4.0f, true);
+    auto& graphics = scoped.get();
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Gdiplus::SolidBrush brush(Gdiplus::Color(255, GetRValue(color), GetGValue(color), GetBValue(color)));
+    const float left = static_cast<float>(x + arrowOffset), top = static_cast<float>(y + 5);
+    Gdiplus::PointF points[] = {
+        {left, top + (processSortDescending ? 0.f : 6.f)},
+        {left + 8.f, top + (processSortDescending ? 0.f : 6.f)},
+        {left + 4.f, top + (processSortDescending ? 6.f : 0.f)}
+    };
+    graphics.FillPolygon(&brush, points, 3);
+}
+
 static bool processSortLess(
     const ProcessInfo& a,
     const ProcessInfo& b,
@@ -4741,11 +4766,11 @@ static void drawFastProcessTable(HDC hdc)
     drawText(hdc, countText, tableRight - 105, tableTop + 16, textSecondary, smallFont);
 
     const int headerY = tableTop + 54;
-    drawText(hdc, "Name", tableLeft + 16, headerY, textSecondary, smallFont);
-    drawText(hdc, "PID", tableLeft + 280, headerY, textSecondary, smallFont);
-    drawText(hdc, "CPU", tableLeft + 355, headerY, textSecondary, smallFont);
-    drawText(hdc, "Memory", tableLeft + 420, headerY, textSecondary, smallFont);
-    drawText(hdc, "Threads", tableLeft + 520, headerY, textSecondary, smallFont);
+    drawProcessSortHeader(hdc, "Name", tableLeft + 16, headerY, 48, ProcessSort::Name, textSecondary);
+    drawProcessSortHeader(hdc, "PID", tableLeft + 280, headerY, 32, ProcessSort::PID, textSecondary);
+    drawProcessSortHeader(hdc, "CPU", tableLeft + 355, headerY, 36, ProcessSort::CPU, textSecondary);
+    drawProcessSortHeader(hdc, "Memory", tableLeft + 420, headerY, 58, ProcessSort::Memory, textSecondary);
+    drawProcessSortHeader(hdc, "Threads", tableLeft + 520, headerY, 60, ProcessSort::Threads, textSecondary);
     drawText(hdc, "Status", tableLeft + 600, headerY, textSecondary, smallFont);
 
     HPEN linePen = CreatePen(PS_SOLID, 1, uiColor(RGB(33, 44, 58)));
@@ -5989,7 +6014,7 @@ if (currentPage != AppPage::Dashboard)
     drawCenteredControlText(SL::comboRect(0, SL::topRowTop, 4), "English", textPrimary);
 
     // ---- Monitoring Settings ----------------------------
-    std::string intervalText = "500 ms";
+    std::string intervalText = std::to_string(appSettings.updateIntervalMs) + " ms";
 
     if (appSettings.updateIntervalMs == 1000)
         intervalText = "1 second";
@@ -5997,6 +6022,8 @@ if (currentPage != AppPage::Dashboard)
         intervalText = "2 seconds";
     else if (appSettings.updateIntervalMs == 5000)
         intervalText = "5 seconds";
+    else if (appSettings.updateIntervalMs == 10000)
+        intervalText = "10 seconds";
 
     drawPanel(1, SL::topRowTop, SL::panelHeight(5), "Monitoring Settings", L"performance.png");
     drawComboRow(1, SL::topRowTop, 0, "Update Interval", "How often to refresh data.", intervalText);
@@ -6100,9 +6127,9 @@ if (currentPage != AppPage::Dashboard)
 
     // ---- System Integration -----------------------------
     drawPanel(2, SL::middleRowTop, SL::panelHeight(4), "System Integration", L"tools.png");
-    drawSwitchRow(2, SL::middleRowTop, 0, "Show Overlay Widget", "Enable desktop CPU/RAM overlay.", appSettings.showOverlayWidget);
-    drawButtonRow(2, SL::middleRowTop, 1, "Overlay Hotkey", "Fixed shortcut; click to toggle.", sysMonOverlayHotkeyAvailable ? "Ctrl + Alt + O" : "Unavailable", 124);
-    drawButtonRow(2, SL::middleRowTop, 2, "Administrator Access", "This build already runs elevated.", "View Status", 112);
+    drawSwitchRow(2, SL::middleRowTop, 0, "Show Overlay Widget", "Choose metrics and overlay appearance.", appSettings.showOverlayWidget);
+    drawButtonRow(2, SL::middleRowTop, 1, "Overlay Options", "Drag to move; Ctrl + Alt + O to toggle.", "Configure", 124);
+    drawButtonRow(2, SL::middleRowTop, 2, "Sensor Status", temperatureStats.hardwareSensorAvailable ? "Sensors: Active" : "Sensors: Unavailable", "Details", 112);
     drawButtonRow(2, SL::middleRowTop, 3, "File Associations", "Open .sysmonlog files in Notepad.", "Associate", 96);
 
     // ---- About ------------------------------------------
@@ -6123,7 +6150,7 @@ if (currentPage != AppPage::Dashboard)
 
         drawText(hdc, "Prof System Monitor", aboutX + 58, aboutY + 2, textPrimary, settingsRowFont);
         drawText(hdc, "Version " SYSMON_VERSION_STRING, aboutX + 58, aboutY + 22, muted, settingsDescriptionFont);
-        drawText(hdc, "Real insights. A smoother tomorrow.", aboutX, aboutY + 58, muted, settingsDescriptionFont);
+        drawText(hdc, "Dependencies & licenses (click to open)", aboutX, aboutY + 58, muted, settingsDescriptionFont);
     }
 
     // ---- Backup & Restore -------------------------------
@@ -6667,11 +6694,11 @@ if (currentPage != AppPage::Dashboard)
 
     const int headerY = tableTop + 54;
 
-    drawText(hdc, "Name", tableLeft + 16, headerY, textSecondary, smallFont);
-    drawText(hdc, "PID", tableLeft + 280, headerY, textSecondary, smallFont);
-    drawText(hdc, "CPU", tableLeft + 355, headerY, textSecondary, smallFont);
-    drawText(hdc, "Memory", tableLeft + 420, headerY, textSecondary, smallFont);
-    drawText(hdc, "Threads", tableLeft + 520, headerY, textSecondary, smallFont);
+    drawProcessSortHeader(hdc, "Name", tableLeft + 16, headerY, 48, ProcessSort::Name, textSecondary);
+    drawProcessSortHeader(hdc, "PID", tableLeft + 280, headerY, 32, ProcessSort::PID, textSecondary);
+    drawProcessSortHeader(hdc, "CPU", tableLeft + 355, headerY, 36, ProcessSort::CPU, textSecondary);
+    drawProcessSortHeader(hdc, "Memory", tableLeft + 420, headerY, 58, ProcessSort::Memory, textSecondary);
+    drawProcessSortHeader(hdc, "Threads", tableLeft + 520, headerY, 60, ProcessSort::Threads, textSecondary);
     drawText(hdc, "Status", tableLeft + 600, headerY, textSecondary, smallFont);
 
     HPEN processHeaderPen =
@@ -8494,15 +8521,6 @@ else if (currentPage == AppPage::SystemInfo)
         96,
         textSecondary,
         smallFont
-    );
-
-    drawRoundedBox(
-        hdc,
-        700,
-        67,
-        818,
-        95,
-        uiColor(RGB(12, 29, 36))
     );
 
     HBRUSH statusDotBrush =
@@ -19383,63 +19401,6 @@ drawText(
 // --------------------------------------------------------
 // DASHBOARD STATUS / DATE / TIME
 // --------------------------------------------------------
-
-const int healthPillLeft = 575;
-const int healthPillTop = 68;
-const int healthPillRight = 690;
-const int healthPillBottom = 94;
-
-drawRoundedBox(
-    hdc,
-    healthPillLeft,
-    healthPillTop,
-    healthPillRight,
-    healthPillBottom,
-    uiColor(RGB(12, 29, 36))
-);
-
-HPEN healthOutlinePen =
-    CreatePen(
-        PS_SOLID,
-        1,
-        uiColor(RGB(24, 58, 66))
-    );
-
-HGDIOBJ oldHealthOutlinePen =
-    SelectObject(
-        hdc,
-        healthOutlinePen
-    );
-
-HGDIOBJ oldHealthOutlineBrush =
-    SelectObject(
-        hdc,
-        GetStockObject(HOLLOW_BRUSH)
-    );
-
-RoundRect(
-    hdc,
-    healthPillLeft,
-    healthPillTop,
-    healthPillRight,
-    healthPillBottom,
-    18,
-    18
-);
-
-SelectObject(
-    hdc,
-    oldHealthOutlineBrush
-);
-
-SelectObject(
-    hdc,
-    oldHealthOutlinePen
-);
-
-DeleteObject(
-    healthOutlinePen
-);
 
 HBRUSH healthBrush =
     CreateSolidBrush(

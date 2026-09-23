@@ -35,9 +35,11 @@ bool addTrayIcon(HWND hwnd)
 
     trayIcon.hIcon =
         LoadIcon(
-            nullptr,
-            IDI_APPLICATION
+            GetModuleHandle(nullptr),
+            MAKEINTRESOURCE(1)
         );
+
+    if (!trayIcon.hIcon) trayIcon.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
 
     strcpy_s(
         trayIcon.szTip,

@@ -8,6 +8,8 @@
 #include <netioapi.h>
 #include <tlhelp32.h>
 #include "Stats.h"
+#include "AppLifecycle.h"
+#include <cmath>
 
 #include <ws2tcpip.h>
 #include <wlanapi.h>
@@ -7372,6 +7374,7 @@ struct BridgeSnapshot
 };
 
 static HANDLE sensorBridgeProcess = nullptr;
+static HANDLE sensorBridgeJob = nullptr;
 static HANDLE sensorBridgeReadPipe = nullptr;
 static HANDLE sensorBridgeReader = nullptr;
 static CRITICAL_SECTION sensorBridgeLock;
@@ -7467,7 +7470,7 @@ static bool parseBridgeSensorLine(
     char* end = nullptr;
     double value = std::strtod(fields[5].c_str(), &end);
 
-    if (end == fields[5].c_str() || *end != '\0')
+    if (end == fields[5].c_str() || *end != '\0' || !std::isfinite(value))
     {
         return false;
     }
@@ -7548,6 +7551,7 @@ static DWORD WINAPI sensorBridgeReaderProc(LPVOID)
         }
 
         pending.append(buffer, bytesRead);
+        if (pending.size()>1024*1024 || current.size()>16384) { AppLifecycle::log("Sensor protocol limit exceeded"); break; }
 
         while (true)
         {
@@ -7566,6 +7570,10 @@ static DWORD WINAPI sensorBridgeReaderProc(LPVOID)
                 line.pop_back();
             }
 
+            if(line.rfind("ERROR|",0)==0) {
+                static ULONGLONG lastError=0;
+                if(!lastError || GetTickCount64()-lastError>30000) {AppLifecycle::log("Hardware sensor unavailable");lastError=GetTickCount64();}
+            }
             if (line == "SNAPSHOT_BEGIN")
             {
                 current.clear();
@@ -7655,13 +7663,21 @@ bool startHardwareSensorBridge()
     std::vector<char> commandLine(command.begin(), command.end());
     commandLine.push_back('\0');
 
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+        if(job) CloseHandle(job); CloseHandle(readPipe); CloseHandle(writePipe);
+        AppLifecycle::log("Cannot protect sensor process lifetime"); return false;
+    }
+
     BOOL created = CreateProcessA(
         nullptr,
         commandLine.data(),
         nullptr,
         nullptr,
         TRUE,
-        CREATE_NO_WINDOW,
+        CREATE_NO_WINDOW | CREATE_SUSPENDED,
         nullptr,
         nullptr,
         &startup,
@@ -7670,11 +7686,18 @@ bool startHardwareSensorBridge()
 
     CloseHandle(writePipe);
 
-    if (!created)
+    if (!created || !AssignProcessToJobObject(job, process.hProcess))
     {
-        CloseHandle(readPipe);
+        if (created) { TerminateProcess(process.hProcess,1); WaitForSingleObject(process.hProcess,INFINITE); CloseHandle(process.hThread); CloseHandle(process.hProcess); }
+        CloseHandle(job); CloseHandle(readPipe);
+        AppLifecycle::log("Sensor helper unavailable or job assignment failed");
         return false;
     }
+    sensorBridgeJob=job;
+    if (ResumeThread(process.hThread)==static_cast<DWORD>(-1)) {
+        TerminateJobObject(job,1); CloseHandle(process.hThread); CloseHandle(process.hProcess); CloseHandle(readPipe); CloseHandle(job); sensorBridgeJob=nullptr; return false;
+    }
+    AppLifecycle::log("Sensor helper started");
 
     if (!sensorBridgeLockInitialized)
     {
@@ -7709,6 +7732,7 @@ bool startHardwareSensorBridge()
         CloseHandle(sensorBridgeProcess);
         sensorBridgeReadPipe = nullptr;
         sensorBridgeProcess = nullptr;
+        CloseHandle(sensorBridgeJob); sensorBridgeJob=nullptr;
         return false;
     }
 
@@ -7731,18 +7755,9 @@ void stopHardwareSensorBridge()
 
     if (sensorBridgeReader != nullptr)
     {
-        DWORD waitResult = WaitForSingleObject(
-            sensorBridgeReader,
-            2000
-        );
-
-        if (waitResult == WAIT_TIMEOUT &&
-            sensorBridgeReadPipe != nullptr)
-        {
-            CloseHandle(sensorBridgeReadPipe);
-            sensorBridgeReadPipe = nullptr;
-            WaitForSingleObject(sensorBridgeReader, 1000);
-        }
+        CancelSynchronousIo(sensorBridgeReader);
+        // Do not release the pipe or snapshot lock while the reader can use them.
+        WaitForSingleObject(sensorBridgeReader, INFINITE);
 
         CloseHandle(sensorBridgeReader);
         sensorBridgeReader = nullptr;
@@ -7766,6 +7781,7 @@ void stopHardwareSensorBridge()
         sensorBridgeLockInitialized = false;
     }
 
+    if (sensorBridgeJob) { CloseHandle(sensorBridgeJob); sensorBridgeJob=nullptr; }
     latestSensorSnapshot = BridgeSnapshot();
 }
 
@@ -8856,10 +8872,15 @@ namespace
         static BackgroundSampler<StatsSnapshot> sampler([](unsigned flags)
         {
             static bool bridgeStarted = false;
-            if (!bridgeStarted)
-            {
-                StatsCollector::startHardwareSensorBridge();
-                bridgeStarted = true;
+            static ULONGLONG lastBridgeAttempt=0;
+            if (monitoringPaused) {
+                StatsCollector::stopHardwareSensorBridge();
+                bridgeStarted=false; lastBridgeAttempt=0; flags=0;
+            } else if (!bridgeStarted || GetTickCount64()-lastBridgeAttempt>30000) {
+                if(!lastBridgeAttempt || GetTickCount64()-lastBridgeAttempt>30000) {
+                    bridgeStarted=StatsCollector::startHardwareSensorBridge();
+                    lastBridgeAttempt=GetTickCount64();
+                }
             }
             if (flags & Sample) StatsCollector::updateStats((flags & Heavy) != 0);
             if (flags & System) StatsCollector::refreshSystemInfo(true);
@@ -8928,4 +8949,11 @@ void stopHardwareSensorBridge()
 {
     statsSampler().stop();
     StatsCollector::stopHardwareSensorBridge();
+}
+
+void setMonitoringPaused(bool paused)
+{
+    monitoringPaused=paused;
+    statsSampler().request(0x80000000u | Sample | Heavy);
+    AppLifecycle::log(paused ? "Monitoring paused" : "Monitoring resumed");
 }

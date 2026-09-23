@@ -8,7 +8,7 @@ try {
     $compiler = (Get-Command g++ -ErrorAction Stop).Source
     $resourceCompiler = Join-Path (Split-Path $compiler) "windres.exe"
     $sources = @("Main.cpp", "Stats.cpp", "Processes.cpp", "UI.cpp", "Settings.cpp", "Tray.cpp", "Widget.cpp")
-    $libraries = @("-lgdiplus", "-lgdi32", "-lpsapi", "-lcomctl32", "-lshell32", "-lole32", "-loleaut32", "-luuid", "-lwbemuuid", "-liphlpapi", "-lws2_32", "-lsetupapi", "-lcfgmgr32", "-lpdh", "-lwlanapi", "-lpowrprof", "-ldwmapi", "-ltaskschd", "-lwinhttp")
+    $libraries = @("-lgdiplus", "-lgdi32", "-lpsapi", "-lcomctl32", "-lshell32", "-lole32", "-loleaut32", "-luuid", "-lwbemuuid", "-liphlpapi", "-lws2_32", "-lsetupapi", "-lcfgmgr32", "-lpdh", "-lwlanapi", "-lpowrprof", "-ldwmapi", "-ltaskschd", "-lwinhttp", "-lversion")
     $options = @("-std=c++17", "-O2", "-static", "-I.")
     & $resourceCompiler SysMon.rc -O coff -o SysMon.res
     if ($LASTEXITCODE -ne 0) { throw "Resource compilation failed" }
@@ -16,6 +16,14 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Application build failed" }
     Write-Host "Built $OutputPath successfully." -ForegroundColor Green
     if ($RunTests) {
+        & $compiler @options tests/shutdown_deadline_test.cpp -o tests/shutdown_deadline_test.exe
+        if ($LASTEXITCODE -ne 0) { throw "Shutdown deadline test build failed" }
+        & ./tests/shutdown_deadline_test.exe
+        if ($LASTEXITCODE -ne 0) { throw "Shutdown deadline test failed" }
+        & $compiler @options tests/startup_manager_test.cpp -o tests/startup_manager_test.exe @libraries
+        if ($LASTEXITCODE -ne 0) { throw "Startup manager test build failed" }
+        & ./tests/startup_manager_test.exe
+        if ($LASTEXITCODE -ne 0) { throw "Startup manager test failed" }
         & $compiler @options tests/settings_runtime_test.cpp -o tests/settings_runtime_test.exe
         if ($LASTEXITCODE -ne 0) { throw "Settings runtime test build failed" }
         & ./tests/settings_runtime_test.exe

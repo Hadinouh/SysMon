@@ -35,3 +35,15 @@ Associate makes .sysmonlog files open in Windows Notepad.
 Export saves SysMon-settings-backup.ini in the data folder. Import restores that backup.
 Data Folder opens logs and backups. Create Report writes a local template you can fill in and share.
 No report is sent automatically.
+
+V1.0 FEATURES
+Ctrl+Q: Exit fully. Ctrl+P: Pause/resume. Ctrl+comma: Settings.
+Right-click Settings: manual updates, release notes, licenses.
+Overlay Options: choose appearance and content independently; right-click the overlay for the same menu.
+Reset to Defaults: select one section or all settings.
+Startup Apps: reversible current-user Run entries; use the Windows button for other sources.
+SysMon.log: diagnostic events in the Data Folder; Support Report excludes personal system identifiers.
+
+OVERLAY APPEARANCE
+Precision Rings, Telemetry Stack, Side Rail, and Floating Tiles replace the original styles.
+Use Settings > Overlay Options > Show background to toggle the panel background. Opacity applies to the whole overlay in either mode.

@@ -12,7 +12,7 @@ namespace Updates
 {
 inline constexpr const char* currentVersion=SYSMON_VERSION_STRING;
 inline constexpr const char* releasePage="https://github.com/Hadinouh/SysMon/releases/latest";
-struct Result { std::string status; std::string version; bool newer=false; bool failed=false; };
+struct Result { std::string status; std::string version; bool newer=false; bool failed=false; std::string notes; };
 inline bool parseVersion(const std::string& text, std::array<unsigned,3>& output)
 {
     static const std::regex format(R"(^[vV]?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?$)");
@@ -39,7 +39,16 @@ inline Result interpret(unsigned status, const std::string& body)
     if(!parseVersion(match[1].str(),release) || !parseVersion(currentVersion,current))
         return {"Unrecognized release version.","",false,true};
     const bool newer=release>current;
-    return {newer ? "Update "+match[1].str()+" is available." : "You are up to date.", match[1].str(),newer,false};
+    Result result{newer ? "Update "+match[1].str()+" is available." : "You are up to date.", match[1].str(),newer,false};
+    static const std::regex notes(R"notes("body"\s*:\s*"((?:\\.|[^"\\])*)")notes");
+    if(std::regex_search(body,match,notes)) {
+        std::string raw=match[1].str();
+        for(size_t i=0;i<raw.size() && result.notes.size()<12000;++i) {
+            if(raw[i]=='\\' && i+1<raw.size()) {char c=raw[++i];result.notes+=c=='n'?'\n':c=='r'?'\r':c=='t'?'\t':c;}
+            else result.notes+=raw[i];
+        }
+    }
+    return result;
 }
 struct Internet {
     HINTERNET handle=nullptr;
@@ -75,7 +84,7 @@ inline Result check()
     return interpret(status,body);
 }
 inline BackgroundSampler<Result>& sampler() {
-    static BackgroundSampler<Result> worker([](unsigned) { return check(); });
+    static BackgroundSampler<Result> worker([](unsigned) { return check(); }, false);
     return worker;
 }
 inline std::string status="Automatically check for updates.";

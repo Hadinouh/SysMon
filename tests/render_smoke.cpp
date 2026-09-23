@@ -45,7 +45,7 @@ int main(int argc, char** argv)
         {"SettingsScrolled",AppPage::Settings,PerformanceView::Overview}
     };
     struct Viewport { float scale, scaleX; };
-    for(auto viewport : {Viewport{1.0f,1.0f}, Viewport{1.75f,1.75f}, Viewport{1.4f,1920.0f/1190.0f}, Viewport{1.75f,3440.0f/1190.0f}}) for(const auto& page : pages)
+    for(auto viewport : {Viewport{1.0f,1.0f}, Viewport{1.25f,1.25f}, Viewport{1.5f,1.5f}, Viewport{2.0f,2.0f}, Viewport{1.75f,1.75f}, Viewport{1.4f,1920.0f/1190.0f}, Viewport{1.75f,3440.0f/1190.0f}}) for(const auto& page : pages)
     {
         const float scale=viewport.scale;
         currentPage=page.page; performanceView=page.view;

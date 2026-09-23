@@ -26,6 +26,9 @@ SysMon-support.txt
 /tests/*-render.png
 /tests/*-light.png
 /tests/layout-*.png
+tests/overlay-*-background.png
+tests/overlay-*-transparent.png
+tests/taskbar-logo.png
 
 # Release packaging output
 /dist/
@@ -39,3 +42,6 @@ no need/
 # OS files
 Thumbs.db
 .DS_Store
+
+# Local verification output
+tests/*.log

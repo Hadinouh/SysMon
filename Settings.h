@@ -34,6 +34,13 @@ struct SysMonAppSettings
     bool allowAnonymousUsageData = false;
 
     bool showOverlayWidget = true;
+    int overlayStyle = 0; // Precision Rings, Telemetry Stack, Side Rail, Floating Tiles
+    int overlayMetrics = 3; // CPU, RAM, GPU, Disk, Network bitmask
+    int overlayOpacity = 90;
+    int overlayScale = 100;
+    bool overlayTopmost = true;
+    bool overlayBackground = true;
+    bool overlayRememberPosition = true;
 };
 
 extern SysMonAppSettings appSettings;
@@ -61,3 +68,5 @@ bool isLightTheme();
 bool isStartWithWindowsEnabled();
 
 extern bool sysMonOverlayHotkeyAvailable;
+
+void resetSettingsSection(int section);

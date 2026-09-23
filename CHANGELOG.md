@@ -2,6 +2,46 @@
 
 All notable SysMon changes are documented here.
 
+## [1.0.0-rc7] - 2026-09-23
+
+- Highlight the active Running Processes sort column and show its ascending/descending arrow, including during scrolling.
+
+## [1.0.0-rc6] - 2026-09-23
+
+- Display System Healthy as a green dot and text without a background or border.
+- Move all 28 application PNG assets into logos/ and update loading, icon generation and packaging paths.
+
+## [1.0.0-rc5] - 2026-09-23
+
+- Load higher-resolution executable icons for process details and scaled process rows.
+- Share icon resolutions across instances of the same application; retain background extraction and cached-only scrolling.
+
+## [1.0.0-rc4] - 2026-09-23
+
+- Correct GPU and Network View All hitboxes by accounting for the content viewport's vertical offset.
+- Add regression checks for the visible buttons and reject clicks in the former invisible hitboxes.
+- Replace sidebar PNG symbols with original vector icons representing their labels, including CPU, RAM, GPU and temperature.
+
+## [1.0.0-rc3] - 2026-09-23
+
+- Add MIT licensing for original code, privacy/security documentation and an asset provenance checklist.
+- Expand dependency notices with exact versions, upstream licenses and corresponding source archives.
+- Disable Release debug symbols in the helper and vendored sensor library; reject PDBs and local build paths during packaging.
+- Stop tracking the compiled executable; retain portable binaries in release packages.
+- Update v1.0 documentation and overlay previews. The candidate remains unsigned.
+
+## [1.0.0-rc1] - 2026-09-22
+
+- Tie the sensor helper to the parent process and explicitly clean up tray, overlay, timers and workers.
+- Add a bounded shutdown fallback and prevent duplicate application instances.
+- Separate overlay appearance from metric selection; remember monitor positions and add scale, opacity and topmost settings.
+- Add pause/resume, useful tray actions, keyboard shortcuts and first-run guidance.
+- Manage current-user Run entries reversibly and preserve original registry value data.
+- Validate settings, reset individual sections, explain settings with tooltips and expose sensor status.
+- Add local diagnostics, privacy-conscious support reports, manual update details and dependency notices.
+- Add per-monitor DPI awareness, EXE version metadata and an unsigned portable release candidate.
+- Verify lifecycle, settings, startup restoration and dark/light rendering; see V1.0-VERIFICATION.md for remaining acceptance limits.
+
 ## [0.9.0] - 2026-09-20
 
 ### Monitoring

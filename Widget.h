@@ -19,3 +19,5 @@ LRESULT CALLBACK WidgetProc(
     WPARAM wParam,
     LPARAM lParam
 );
+void configureOverlay(HWND owner);
+void applyOverlayAppearance();

@@ -1,0 +1,67 @@
+SysMon 1.0.0 dependency information
+
+Original SysMon code is MIT licensed (LICENSE). Dependencies retain their own
+licenses. Do not remove licenses/ or sources/ from the portable distribution.
+
+Exact redistributed package inventory:
+
+LibreHardwareMonitorLib 0.9.6 -- MPL-2.0 and separately licensed portions.
+https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
+The exact local source, including SysMon changes, is in sources/LibreHardwareMonitor
+in the release. Build using the .NET 10 SDK. Preserve upstream notices and headers.
+
+BlackSharp.Core 1.2.0 -- MPL-2.0; copyright Florian K.
+https://github.com/Blacktempel/BlackSharp/tree/e3383d014620777a561c939efe3f27ed4f72bc04
+DiskInfoToolkit 2.1.4 -- MPL-2.0; copyright Florian K.
+https://github.com/Blacktempel/DiskInfoToolkit/tree/a6ea726b6118d4469d1228e19b5db0f3437864dc
+RAMSPDToolkit-NDD 1.6.1 -- MPL-2.0; copyright Florian K.
+https://github.com/Blacktempel/RAMSPDToolkit/tree/0ea51855144eef82787f983004fb8ce7346f8227
+These unmodified libraries use licenses/MPL-2.0.txt. Corresponding source archives
+at the package-declared revisions are included in sources/.
+
+HidSharp 2.6.4 -- Apache-2.0; copyright 2010-2025 James F. Bellinger.
+https://github.com/IntergatedCircuits/HidSharp/tree/main-2.6
+See licenses/HidSharp-LICENSE.txt and licenses/HidSharp-NOTICE.txt.
+
+Mono.Posix.NETStandard 1.0.0 -- MIT, with upstream notices.
+https://github.com/mono/mono/tree/main/mcs/class/Mono.Posix
+https://github.com/mono/mono.posix
+See licenses/Mono.Posix-LICENSE.txt and licenses/Mono.Posix-PATENTS.txt.
+The package's historical license URL points to the mono/mono repository.
+
+System.CodeDom 10.0.12 -- MIT
+System.Formats.Nrbf 10.0.12 -- MIT
+System.IO.Ports 10.0.12 -- MIT
+System.Management 10.0.12 -- MIT
+System.Resources.Extensions 10.0.12 -- MIT
+Source for these Microsoft packages: https://github.com/dotnet/runtime
+See licenses/DotNet-LICENSE.txt and licenses/DotNet-Packages-THIRD-PARTY-NOTICES.txt.
+Package metadata and source revisions when supplied are in licenses/packages/.
+
+Microsoft.NETCore.App.Runtime.win-x64 10.0.8 -- MIT and third-party licenses.
+https://github.com/dotnet/runtime/tree/v10.0.8
+Self-contained packages include SysMonSensors/DOTNET-LICENSE.txt and
+SysMonSensors/DOTNET-THIRD-PARTY-NOTICES.txt from the exact runtime package.
+Framework-dependent packages do not redistribute this runtime.
+
+PawnIO.Modules 0.2.11 -- LGPL-2.1; unmodified modules embedded in the sensor library.
+https://github.com/namazso/PawnIO.Modules/tree/0.2.11
+See licenses/PawnIO.Modules-COPYING.txt and sources/PawnIO.Modules-0.2.11.zip.
+Upstream source contains build instructions. Replace the embedded modules by
+rebuilding LibreHardwareMonitorLib. Its upstream notices also preserve the BSD
+notice for Aga.Controls; this does not imply that its GUI is shipped by SysMon.
+
+GCC 16.2.0 runtime (MSYS2 UCRT64 Rev3) -- GPL-3.0 with GCC Runtime Library Exception.
+https://gcc.gnu.org/releases.html
+See licenses/GCC-GPL-3.txt and licenses/GCC-Runtime-Exception.txt.
+MinGW-w64 CRT and winpthreads 14.0.0.r375.g9c1abbbf5-1 (MSYS2 packages)
+-- permissive/public-domain component licenses.
+https://www.mingw-w64.org/ and https://github.com/mingw-w64/mingw-w64
+See licenses/MinGW-w64-runtime.txt and licenses/winpthreads.txt.
+BUILD-TOOLS.txt records the build tool versions in each portable package.
+Windows system libraries, installed fonts and system sounds are not bundled.
+
+DEPENDENCIES.json lists every resolved managed library in each package. Packaging
+rejects new dependency versions until these notices are reviewed.
+
+

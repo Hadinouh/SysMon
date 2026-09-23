@@ -296,3 +296,5 @@ void refreshNetworkStats(bool force = false);
 void refreshTemperatureStats(bool force = false);
 bool startHardwareSensorBridge();
 void stopHardwareSensorBridge();
+
+void setMonitoringPaused(bool paused);

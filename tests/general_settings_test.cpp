@@ -29,6 +29,7 @@ int main()
     appSettings.showDesktopNotifications=false; appSettings.logAlertsToFile=false;
     appSettings.playAlerts=false; appSettings.enableDataLogging=true; appSettings.logRetentionDays=14;
     appSettings.showOverlayWidget=false;
+    appSettings.overlayStyle=3;appSettings.overlayMetrics=31;appSettings.overlayOpacity=60;appSettings.overlayScale=150;appSettings.overlayTopmost=false;appSettings.overlayBackground=false;
     assert(saveAppSettings());
     appSettings=SysMonAppSettings();
     loadAppSettings();
@@ -40,6 +41,11 @@ int main()
     assert(appSettings.diskUsageAlert==80 && appSettings.memoryUsageAlert==75);
     assert(!appSettings.showDesktopNotifications && !appSettings.logAlertsToFile && !appSettings.playAlerts);
     assert(appSettings.enableDataLogging && appSettings.logRetentionDays==14 && !appSettings.showOverlayWidget);
+    assert(appSettings.overlayStyle==3 && appSettings.overlayMetrics==31 && appSettings.overlayOpacity==60 && appSettings.overlayScale==150 && !appSettings.overlayTopmost && !appSettings.overlayBackground);
+    WritePrivateProfileStringA("Monitoring","UpdateIntervalMs","garbage",path.c_str());
+    WritePrivateProfileStringA("Alerts","CpuTemperature","999999999999999999999",path.c_str());
+    WritePrivateProfileStringA("Overlay","Metrics","0",path.c_str());
+    loadAppSettings();assert(appSettings.updateIntervalMs==500 && appSettings.cpuTemperatureAlert==85 && appSettings.overlayMetrics==1);
     assert(isLightTheme() && uiColor(RGB(18,20,26))!=RGB(18,20,26));
     appSettings.theme=0; refreshThemePreference();
     assert(!isLightTheme() && uiColor(RGB(18,20,26))==RGB(18,20,26));
@@ -61,8 +67,8 @@ int main()
     if(existed) { std::ofstream restore(path,std::ios::binary|std::ios::trunc); restore<<backup; }
     else DeleteFileA(path.c_str());
     std::cout<<"PASS: General Settings persistence, reset, clamping, and theme mapping\n";
-    assert(Updates::interpret(200,R"({"tag_name":"v0.9.1"})").newer);
-    assert(Updates::interpret(200,R"({"tag_name":"v1.0.0"})").newer);
+    assert(Updates::interpret(200,R"({"tag_name":"v1.0.1"})").newer);
+    assert(Updates::interpret(200,R"({"tag_name":"v1.1.0"})").newer);
     assert(!Updates::interpret(200,R"({"tag_name":"v0.8.9"})").newer);
     assert(!Updates::interpret(200,R"({"tag_name":"v0.9.0"})").newer);
     assert(!Updates::interpret(404,"").newer);

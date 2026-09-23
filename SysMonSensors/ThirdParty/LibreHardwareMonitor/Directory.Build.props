@@ -1,4 +1,9 @@
 <Project>
+  <!-- SysMon release builds must not embed local PDB paths. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugSymbols>false</DebugSymbols>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
   <PropertyGroup>
     <Version>0.9.6</Version>
     <Copyright>LibreHardwareMonitor</Copyright>

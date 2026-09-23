@@ -6,9 +6,42 @@ It provides real-time CPU, memory, disk, process, hardware, device, and system m
 
 ## Current Version
 
-### v0.9.0
+### v1.0.0
 
-SysMon v0.9.0 is a major monitoring and usability update. It adds multi-GPU monitoring, live network monitoring, hardware temperature sensors, a redesigned Processes experience, a complete Settings page, Windows utility tools, alerts and logging, update checking, startup integration, themes, and responsive/maximized layouts.
+The v1.0 release adds parent-owned sensor cleanup, bounded shutdown, configurable overlays, pause/resume, reversible current-user startup entries, stricter settings, section resets, diagnostics and support reports. See [release notes](RELEASE-NOTES-v1.0.0.md) and [verification limits](V1.0-VERIFICATION.md) before publishing a final release.
+
+Build the portable release with `package-release.ps1`. Its ZIP is `dist/SysMon-v1.0.0.zip`. Extract the entire archive and open its `SysMon.exe`; keep the sensor helper, logos folder, licenses and corresponding sources together. Download compiled packages from [GitHub Releases](https://github.com/Hadinouh/SysMon/releases); the source repository does not track the executable.
+
+## v1.0 overlay previews
+
+These previews are rendered by SysMon's overlay test with sample readings. Each
+style supports independent CPU/RAM/GPU/Disk/Network selection, background on/off,
+opacity, scale, always-on-top and remembered monitor position.
+
+| Precision Rings | Telemetry Stack |
+| --- | --- |
+| ![Precision Rings](docs/images/overlay-0-background.png) | ![Telemetry Stack](docs/images/overlay-1-background.png) |
+| Side Rail | Floating Tiles |
+| ![Side Rail](docs/images/overlay-2-background.png) | ![Floating Tiles](docs/images/overlay-3-background.png) |
+
+## License, privacy and security
+
+Original SysMon code and documentation use the [MIT license](LICENSE).
+Third-party components retain their own licenses. See the exact versions, source
+URLs and included license texts in [third-party notices](THIRD-PARTY-NOTICES.txt).
+LibreHardwareMonitor and the Blacktempel libraries use MPL-2.0; HidSharp uses
+Apache-2.0; Mono.Posix and the Microsoft support libraries use MIT with applicable
+upstream notices. The self-contained helper includes the .NET runtime and its
+notices. Embedded PawnIO modules have separate LGPL-2.1 terms.
+
+Each portable release includes the local LibreHardwareMonitor source and
+corresponding upstream source archives. The application PNGs are documented as ChatGPT-generated for SysMon and distributed under MIT to the extent contributors hold applicable rights; see [asset notices](ASSET-NOTICES.md). Third-party program icons retain their own rights.
+
+SysMon has no telemetry or automatic report uploads. Optional/manual update
+checks contact GitHub. See [privacy](PRIVACY.md), [security reporting](SECURITY.md)
+and the [final-release checklist](RELEASE-CHECKLIST.md).
+
+The previous v0.9.0 release was a major monitoring and usability update. It adds multi-GPU monitoring, live network monitoring, hardware temperature sensors, a redesigned Processes experience, a complete Settings page, Windows utility tools, alerts and logging, update checking, startup integration, themes, and responsive/maximized layouts.
 
 The temperature engine uses the bundled `SysMonSensors` helper based on LibreHardwareMonitor. The Windows release package can publish this helper self-contained so end users do not need to install the .NET runtime separately.
 
@@ -314,6 +347,8 @@ Requirements for the native application:
 - Windows
 - MSYS2 UCRT64 / MinGW-w64 `g++` and `windres`
 - C++17 support
+- .NET 10 SDK for the sensor helper
+- Internet access for NuGet restore and corresponding-source downloads
 
 Build the application from PowerShell:
 
@@ -327,9 +362,30 @@ To create a complete Windows x64 release ZIP, including a self-contained `SysMon
 powershell -ExecutionPolicy Bypass -File .\package-release.ps1
 ```
 
-The finished archive is written to `dist/`.
+The finished archive is written to `dist/`. Add `-RunTests` to run the native
+verification suite. Release publishing disables managed debug information and
+rejects PDB files, local user/build paths in binaries, and unreviewed dependency
+versions. `DEPENDENCIES.json` and `SHA256SUMS.txt` record the packaged components
+and hashes. A .NET runtime install is not required for the default self-contained
+Windows x64 package. `-FrameworkDependentSensors` requires a compatible installed
+.NET 10 runtime instead. Builds remain unsigned until a trusted signing service
+or certificate is configured.
 
 ## Version History
+
+### v1.0.0
+
+- Reliable shutdown, sensor-process cleanup and duplicate-instance prevention.
+- Four redesigned overlays with optional backgrounds and monitor-position memory.
+- Pause/resume and expanded tray actions; reversible current-user Startup Manager.
+- Validated settings, reset controls, improved dropdowns and DPI/resizing fixes.
+- Working Network and GPU process detail windows from View All.
+- Sensor status, diagnostic logging, support reports and improved update details.
+- Embedded application logo and Windows executable version metadata.
+- MIT license, expanded dependency notices, privacy/security documents, source
+  bundles and release checks for debug symbols and local build paths.
+- Final signing and physical multi-monitor checks remain on
+  the release checklist.
 
 ### v0.9.0
 
@@ -453,4 +509,3 @@ The finished archive is written to `dist/`.
 - Added persistent widget ON/OFF state
 - Split the original single-file application into dedicated modules
 - Added separate statistics, settings, tray, widget, and UI modules
-

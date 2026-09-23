@@ -1,5 +1,7 @@
 #pragma once
 #include <condition_variable>
+#include <atomic>
+inline std::atomic<bool> monitoringPaused{false};
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -14,7 +16,7 @@ class BackgroundSampler
 {
 public:
     using Collector = std::function<Snapshot(unsigned)>;
-    explicit BackgroundSampler(Collector collector) : collect_(std::move(collector)) {}
+    explicit BackgroundSampler(Collector collector, bool pausable = true) : collect_(std::move(collector)), pausable_(pausable) {}
     ~BackgroundSampler() { stop(); }
     BackgroundSampler(const BackgroundSampler&) = delete;
     BackgroundSampler& operator=(const BackgroundSampler&) = delete;
@@ -22,7 +24,7 @@ public:
     void request(unsigned flags = 1)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (stopping_) return;
+        if (stopping_ || (pausable_ && monitoringPaused && !(flags & 0x80000000u))) return;
         pending_ |= flags;
         if (!worker_.joinable()) worker_ = std::thread([this] { run(); });
         ready_.notify_one();
@@ -74,6 +76,7 @@ private:
     }
 
     Collector collect_;
+    bool pausable_;
     std::mutex mutex_;
     std::condition_variable ready_;
     std::thread worker_;

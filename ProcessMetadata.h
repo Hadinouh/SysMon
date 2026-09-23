@@ -2,6 +2,7 @@
 #include "BackgroundSampler.h"
 #include <windows.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <objbase.h>
 #include <map>
 #include <string>
@@ -10,11 +11,15 @@
 // UI reads completed metadata; executable and shell access stay on one worker.
 class ProcessMetadataCache
 {
+    struct Icons
+    {
+        std::map<int,HICON> sizes;
+        ~Icons() { for (const auto& entry : sizes) if(entry.second) DestroyIcon(entry.second); }
+    };
     struct Metadata
     {
         std::wstring path;
-        HICON icon = nullptr;
-        ~Metadata() { if (icon) DestroyIcon(icon); }
+        std::shared_ptr<Icons> icons;
     };
     using Snapshot = std::map<DWORD, std::shared_ptr<const Metadata>>;
     struct Request { ULONGLONG tick = 0; bool icon = false; };
@@ -48,23 +53,33 @@ class ProcessMetadataCache
             }
             if (request.second && !result->path.empty())
             {
-                // Reuse another instance's executable icon with independent ownership.
+                // Share resolutions across instances of the same executable.
                 for (const auto& entry : collected_)
                 {
-                    if (entry.second->path == result->path && entry.second->icon)
+                    if (entry.second->path == result->path && entry.second->icons)
                     {
-                        result->icon = CopyIcon(entry.second->icon);
+                        result->icons = entry.second->icons;
                         break;
                     }
                 }
-                if (!result->icon)
+                if (!result->icons)
                 {
+                    result->icons = std::make_shared<Icons>();
+                    // Extract real icon resources at useful physical pixel sizes.
+                    // All shell/executable access remains on this worker.
+                    for (int pixels : {16,24,32,48,64,96}) {
+                        HICON extracted = nullptr;
+                        SHDefExtractIconW(result->path.c_str(),0,0,&extracted,nullptr,pixels);
+                        if(extracted) result->icons->sizes[pixels] = extracted;
+                    }
+                    if (result->icons->sizes.empty()) {
                     SHFILEINFOW info = {};
                     SHGetFileInfoW(result->path.c_str(), 0, &info, sizeof(info), SHGFI_ICON | SHGFI_SMALLICON);
                     if (!info.hIcon)
                         SHGetFileInfoW(result->path.c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info),
                                        SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES);
-                    result->icon = info.hIcon;
+                    if(info.hIcon) result->icons->sizes[16] = info.hIcon;
+                    }
                 }
             }
             collected_[request.first] = std::move(result);
@@ -107,10 +122,13 @@ public:
         auto entry = get(pid, false, true);
         return entry ? entry->path : L"";
     }
-    HICON icon(DWORD pid, bool request = true)
+    HICON icon(DWORD pid, bool request = true, int physicalPixels = 16)
     {
         auto entry = get(pid, true, request);
-        return entry ? entry->icon : nullptr;
+        if(!entry || !entry->icons || entry->icons->sizes.empty()) return nullptr;
+        auto selected=entry->icons->sizes.lower_bound(physicalPixels);
+        if(selected==entry->icons->sizes.end()) selected=std::prev(selected);
+        return selected->second;
     }
     void clear()
     {
