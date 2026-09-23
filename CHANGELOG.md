@@ -1,34 +1,81 @@
-# Changelog
 ## [1.0.0] - 2026-09-23
 
-### Reliability
-- Improved shutdown and sensor-helper cleanup.
-- Added duplicate-instance prevention and Pause/Resume Monitoring.
-- Clarified close-to-tray behavior and expanded tray controls.
+### Reliability and lifecycle
 
-### Features
-- Added four customizable overlay styles: Precision Rings, Telemetry Stack, Side Rail and Floating Tiles.
-- Added independent overlay metrics, optional backgrounds, opacity, scaling, always-on-top and remembered monitor positions.
-- Added reversible management of supported current-user startup entries.
-- Added settings validation, section resets, tooltips and sensor status.
-- Improved local diagnostics, support reports and update checking.
+- Improved full Exit cleanup for SysMon, SysMonSensors, overlays, tray icons, timers, and monitoring workers.
+- Added bounded shutdown behavior.
+- Added parent-owned sensor-process cleanup.
+- Added duplicate-instance prevention.
 
-### Interface
-- Improved Settings dropdowns and responsive layouts.
-- Fixed GPU and Network View All buttons.
-- Added higher-resolution process icons and active-column sorting arrows.
-- Corrected sidebar icons and added the taskbar logo.
-- Simplified System Healthy to a green dot and label.
+### Desktop overlays
 
-### Distribution
-- Organized all 28 PNG assets into the logos folder.
-- Added licensing, dependency notices, privacy, security and asset documentation.
-- Included corresponding third-party source material.
-- Removed debug symbols, local build paths and saved user settings from the release package.
+- Added four redesigned overlay styles:
+  - Precision Rings
+  - Telemetry Stack
+  - Side Rail
+  - Floating Tiles
+- Separated overlay appearance from metric selection.
+- Added selectable CPU, RAM, GPU, Disk, and Network metrics.
+- Added optional backgrounds, opacity, scale, always-on-top, and remembered monitor positions.
 
-This Windows x64 release is unsigned.
-All notable SysMon changes are documented here.
+### Tray and monitoring controls
 
+- Added Pause/Resume Monitoring.
+- Added easier tray access to overlays, Settings, and Exit.
+- Added keyboard shortcuts and first-run guidance.
+
+### Startup Manager
+
+- Added reversible enable/disable controls for supported current-user startup entries.
+- Preserved original registry value data when disabling entries.
+
+### Settings
+
+- Improved dropdown styling and behavior.
+- Added settings validation.
+- Added per-section reset controls.
+- Added tooltips.
+- Added sensor-status information.
+- Improved DPI and resizing behavior.
+
+### Processes
+
+- Fixed GPU View All navigation.
+- Fixed Network View All navigation.
+- Improved executable icon resolution.
+- Added shared icon caching across instances of the same application.
+- Added active-column highlighting and ascending/descending sorting arrows.
+
+### Visual polish
+
+- Replaced sidebar PNG symbols with updated vector-style icons.
+- Moved all application PNG assets into the `logos/` directory.
+- Added the SysMon taskbar/application icon.
+- Simplified System Healthy to a green status dot and text.
+- Improved scaling and resizing behavior.
+
+### Diagnostics and support
+
+- Added local diagnostic logging.
+- Added privacy-conscious support reports.
+- Improved update-checking details.
+
+### Release and packaging
+
+- Added MIT licensing for original SysMon code.
+- Added privacy and security documentation.
+- Added asset provenance documentation.
+- Expanded third-party dependency notices and corresponding source archives.
+- Disabled release debug symbols.
+- Removed PDB files and local build paths from release packages.
+- Stopped tracking the compiled executable in the source repository.
+- Added Windows executable version metadata.
+- Added release validation and verification checks.
+- Removed saved user settings from the distributed package.
+
+### Notes
+
+- The Windows v1.0.0 release is distributed unsigned.
 ## [1.0.0-rc7] - 2026-09-23
 
 - Highlight the active Running Processes sort column and show its ascending/descending arrow, including during scrolling.
